@@ -15,10 +15,14 @@ type Config struct {
 
 // CookieConfig holds cookies and tokens for different services
 type CookieConfig struct {
-	NYSEG         []Cookie `yaml:"nyseg"`
+	NYSEG          []Cookie `yaml:"nyseg"`
 	NYSEGAuthToken string   `yaml:"nyseg_auth_token,omitempty"`
-	ConEd         []Cookie `yaml:"coned"`
+	NYSEGUsername  string   `yaml:"nyseg_username,omitempty"`
+	NYSEGPassword  string   `yaml:"nyseg_password,omitempty"`
+	ConEd          []Cookie `yaml:"coned"`
 	ConEdAuthToken string   `yaml:"coned_auth_token,omitempty"`
+	ConEdUsername  string   `yaml:"coned_username,omitempty"`
+	ConEdPassword  string   `yaml:"coned_password,omitempty"`
 }
 
 // Cookie represents a browser cookie

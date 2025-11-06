@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,10 +18,22 @@ import (
 
 const nysegAPIURL = "https://engage-api-gw-dod79bsd.ue.gateway.dev/usage/usage/download"
 
+// AuthError represents an authentication failure
+type AuthError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *AuthError) Error() string {
+	return e.Message
+}
+
 // NYSEGDirectScraper scrapes data from NYSEG using direct API calls
 type NYSEGDirectScraper struct {
-	cookies []config.Cookie
+	cookies   []config.Cookie
 	authToken string
+	username  string
+	password  string
 }
 
 // NewNYSEGDirectScraper creates a new NYSEG direct API scraper
@@ -36,15 +49,119 @@ func NewNYSEGDirectScraperWithToken(cookies []config.Cookie, authToken string) *
 	}
 }
 
+// NewNYSEGDirectScraperWithCredentials creates a new NYSEG direct API scraper with credentials for auto-login
+func NewNYSEGDirectScraperWithCredentials(cookies []config.Cookie, authToken, username, password string) *NYSEGDirectScraper {
+	return &NYSEGDirectScraper{
+		cookies:   cookies,
+		authToken: authToken,
+		username:  username,
+		password:  password,
+	}
+}
+
+// RefreshAuth performs login and refreshes cookies and auth token
+func (s *NYSEGDirectScraper) RefreshAuth(ctx context.Context) ([]config.Cookie, string, error) {
+	if s.username == "" || s.password == "" {
+		return nil, "", fmt.Errorf("cannot auto-refresh: no username/password configured")
+	}
+
+	fmt.Println("Refreshing authentication...")
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+	)
+
+	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancel()
+
+	browserCtx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	browserCtx, cancel = context.WithTimeout(browserCtx, 60*time.Second)
+	defer cancel()
+
+	// Perform login
+	const loginURL = "https://sso.nyseg.com/es/login"
+	if err := chromedp.Run(browserCtx,
+		chromedp.Navigate(loginURL),
+		chromedp.WaitVisible(`input#_com_liferay_login_web_portlet_LoginPortlet_login`, chromedp.ByQuery),
+		chromedp.SendKeys(`input#_com_liferay_login_web_portlet_LoginPortlet_login`, s.username, chromedp.ByQuery),
+		chromedp.SendKeys(`input#_com_liferay_login_web_portlet_LoginPortlet_password`, s.password, chromedp.ByQuery),
+		chromedp.Sleep(500*time.Millisecond),
+		chromedp.Click(`button[type="submit"]`, chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second),
+	); err != nil {
+		return nil, "", fmt.Errorf("login failed: %w", err)
+	}
+
+	// Navigate to insights to trigger auth
+	if err := chromedp.Run(browserCtx,
+		chromedp.Navigate(nysegInsightsURL),
+		chromedp.WaitVisible(`div.engage-insights-explore`, chromedp.ByQuery),
+	); err != nil {
+		return nil, "", fmt.Errorf("navigating to insights: %w", err)
+	}
+
+	// Extract cookies
+	freshCookies, err := ExtractCookies(browserCtx)
+	if err != nil {
+		return nil, "", fmt.Errorf("extracting cookies: %w", err)
+	}
+
+	// Extract auth token
+	var token string
+	if err := chromedp.Run(browserCtx,
+		chromedp.Evaluate(`
+			(function() {
+				const lsToken = localStorage.getItem('up-authorization') ||
+				                localStorage.getItem('auth_token') ||
+				                localStorage.getItem('access_token');
+				if (lsToken) return lsToken;
+
+				const ssToken = sessionStorage.getItem('up-authorization') ||
+				                sessionStorage.getItem('auth_token') ||
+				                sessionStorage.getItem('access_token');
+				if (ssToken) return ssToken;
+
+				if (window.upAuthToken) return window.upAuthToken;
+				if (window.authToken) return window.authToken;
+
+				return null;
+			})()
+		`, &token),
+	); err != nil {
+		return nil, "", fmt.Errorf("extracting token: %w", err)
+	}
+
+	if token == "" || token == "null" {
+		return nil, "", fmt.Errorf("could not find auth token after login")
+	}
+
+	fmt.Println("✓ Authentication refreshed successfully")
+	return freshCookies, token, nil
+}
+
 // Scrape fetches usage data from NYSEG API
 func (s *NYSEGDirectScraper) Scrape(ctx context.Context) ([]models.UsageData, error) {
-	// If we don't have an auth token, we need to get it from the browser
+	// If we don't have an auth token, try to get it
 	if s.authToken == "" {
-		token, err := s.extractAuthTokenFromBrowser(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("extracting auth token: %w", err)
+		if s.username != "" && s.password != "" {
+			// Auto-refresh if we have credentials
+			cookies, token, err := s.RefreshAuth(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("refreshing auth: %w", err)
+			}
+			s.cookies = cookies
+			s.authToken = token
+		} else {
+			// Fall back to browser extraction
+			token, err := s.extractAuthTokenFromBrowser(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("extracting auth token: %w", err)
+			}
+			s.authToken = token
 		}
-		s.authToken = token
 	}
 	// Calculate date range (last 30 days by default)
 	endDate := time.Now()
@@ -102,6 +219,15 @@ func (s *NYSEGDirectScraper) Scrape(ctx context.Context) ([]models.UsageData, er
 	}
 	defer resp.Body.Close()
 
+	// Check for authentication errors
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &AuthError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("authentication failed (status %d): %s", resp.StatusCode, string(body)),
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
@@ -111,13 +237,128 @@ func (s *NYSEGDirectScraper) Scrape(ctx context.Context) ([]models.UsageData, er
 	contentType := resp.Header.Get("Content-Type")
 	fmt.Printf("Response content-type: %s\n", contentType)
 
-	// Parse CSV response
-	data, err := parseNYSEGCSVReader(resp.Body)
+	// Read response body
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+
+	// Check if response is JSON with promise_id (async API)
+	if contentType == "application/json" {
+		var promiseResp struct {
+			PromiseID string `json:"promise_id"`
+		}
+		if err := json.Unmarshal(bodyBytes, &promiseResp); err == nil && promiseResp.PromiseID != "" {
+			fmt.Printf("Got promise_id: %s, polling for result...\n", promiseResp.PromiseID)
+			return s.pollForCSV(ctx, promiseResp.PromiseID, client, req.Header, startDate, endDate)
+		}
+	}
+
+	// Otherwise try to parse as CSV
+	data, err := parseNYSEGCSVReader(strings.NewReader(string(bodyBytes)))
 	if err != nil {
 		return nil, fmt.Errorf("parsing CSV response: %w", err)
 	}
 
 	return data, nil
+}
+
+// pollForCSV polls the API with the promise_id until the CSV is ready
+func (s *NYSEGDirectScraper) pollForCSV(ctx context.Context, promiseID string, client *http.Client, headers http.Header, startDate, endDate time.Time) ([]models.UsageData, error) {
+	// The actual polling endpoint is /promix/{promise_id}, not /usage/usage/download
+	pollURL := fmt.Sprintf("https://engage-api-gw-dod79bsd.ue.gateway.dev/promix/%s", promiseID)
+
+	maxAttempts := 30
+	pollInterval := 2 * time.Second
+
+	fmt.Printf("Polling with URL: %s\n", pollURL)
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(pollInterval)
+		}
+
+		fmt.Printf("Polling attempt %d/%d...\n", attempt+1, maxAttempts)
+
+		req, err := http.NewRequestWithContext(ctx, "GET", pollURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating poll request: %w", err)
+		}
+
+		// Copy headers from original request
+		req.Header = headers.Clone()
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("polling request: %w", err)
+		}
+
+		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if err != nil {
+			return nil, fmt.Errorf("reading poll response: %w", err)
+		}
+
+		// Debug: show response on first and every 5th attempt
+		if attempt == 0 || attempt == 5 {
+			preview := string(bodyBytes)
+			if len(preview) > 200 {
+				preview = preview[:200]
+			}
+			fmt.Printf("   Response (HTTP %d): %s\n", resp.StatusCode, preview)
+		}
+
+		// Check if we got CSV
+		contentType := resp.Header.Get("Content-Type")
+		if strings.Contains(contentType, "csv") || strings.Contains(contentType, "text") {
+			fmt.Println("✓ CSV ready, parsing...")
+			return parseNYSEGCSVReader(strings.NewReader(string(bodyBytes)))
+		}
+
+		// Check response for promise status
+		var promiseResp struct {
+			Code       string `json:"code"`
+			PromiseURL string `json:"promise_url"`
+		}
+		if err := json.Unmarshal(bodyBytes, &promiseResp); err == nil {
+			if attempt == 0 || attempt == 5 {
+				fmt.Printf("   Code: %s\n", promiseResp.Code)
+			}
+
+			// Check if data is ready - try fetching even if partial after a few attempts
+			if promiseResp.PromiseURL != "" && (promiseResp.Code == "PROMISE_FOUND" || (attempt > 5 && promiseResp.Code == "PROMISE_FOUND_PARTIAL_DATA")) {
+				fmt.Printf("✓ Data available (code: %s), fetching CSV from S3: %s\n", promiseResp.Code, promiseResp.PromiseURL)
+				// Fetch the CSV from S3
+				csvReq, err := http.NewRequestWithContext(ctx, "GET", promiseResp.PromiseURL, nil)
+				if err != nil {
+					return nil, fmt.Errorf("creating S3 request: %w", err)
+				}
+
+				csvResp, err := client.Do(csvReq)
+				if err != nil {
+					return nil, fmt.Errorf("fetching CSV from S3: %w", err)
+				}
+				defer csvResp.Body.Close()
+
+				if csvResp.StatusCode != http.StatusOK {
+					body, _ := io.ReadAll(csvResp.Body)
+					return nil, fmt.Errorf("S3 returned status %d: %s", csvResp.StatusCode, string(body))
+				}
+
+				return parseNYSEGCSVReader(csvResp.Body)
+			}
+
+			// Check for failure
+			if strings.Contains(promiseResp.Code, "ERROR") || strings.Contains(promiseResp.Code, "FAILED") {
+				return nil, fmt.Errorf("CSV generation failed with code: %s", promiseResp.Code)
+			}
+
+			// Otherwise still waiting (PROMISE_FOUND_PARTIAL_DATA or similar)
+		}
+	}
+
+	return nil, fmt.Errorf("CSV generation timed out after %d attempts", maxAttempts)
 }
 
 // extractAuthTokenFromBrowser uses chromedp to navigate to the page and extract the auth token
