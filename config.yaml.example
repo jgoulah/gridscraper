@@ -1,0 +1,23 @@
+# GridScraper Configuration Example
+# Copy this file to config.yaml and customize
+
+cookies:
+  # NYSEG cookies (populated by 'gridscraper login nyseg')
+  nyseg: []
+  nyseg_auth_token: ""
+  nyseg_username: ""
+  nyseg_password: ""
+
+  # Con Edison cookies (populated by 'gridscraper login coned')
+  coned: []
+  coned_auth_token: ""
+  coned_username: ""
+  coned_password: ""
+
+# MQTT Configuration for Home Assistant
+mqtt:
+  enabled: true
+  broker: "homeassistant.local:1883"
+  username: "mqttuser"
+  password: "your-mqtt-password-here"
+  topic_prefix: "electric_meter"

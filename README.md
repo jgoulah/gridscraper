@@ -8,6 +8,7 @@ A Go-based CLI tool to scrape electrical usage data from utility websites (NYSEG
 - **Browser automation**: Uses chromedp for JavaScript-rendered pages
 - **Duplicate prevention**: Won't re-scrape existing data
 - **SQLite storage**: Local database for tracking usage over time
+- **MQTT publishing**: Send data to Home Assistant via MQTT
 - **Debug mode**: Inspect pages to troubleshoot scraping issues
 
 ## Installation
@@ -84,7 +85,32 @@ Date          kWh
 Total: 146.08 kWh (3 records)
 ```
 
-### 4. Debug Scraping Issues
+### 4. Publish to MQTT (Home Assistant)
+
+After fetching data, you can publish it to Home Assistant via MQTT:
+
+```bash
+# Publish all NYSEG data to MQTT
+gridscraper publish --service nyseg
+
+# Publish data from the last 7 days
+gridscraper publish --service nyseg --since 7d
+
+# Publish specific date range
+gridscraper publish --service nyseg --since 2024-01-01 --until 2024-01-31
+
+# Publish all services
+gridscraper publish --all
+```
+
+This will publish to the following MQTT topics:
+- `electric_meter/value` - The kWh reading (e.g., "45.23")
+- `electric_meter/uom` - Unit of measure ("kWh")
+- `electric_meter/startTime` - ISO8601 timestamp of the reading
+
+**Note**: MQTT must be configured in `config.yaml` first (see Configuration section below).
+
+### 5. Debug Scraping Issues
 
 If data extraction fails, use debug mode:
 
@@ -124,7 +150,22 @@ cookies:
       httpOnly: true
       secure: true
   coned: []
+
+# Optional: MQTT configuration for Home Assistant
+mqtt:
+  enabled: true
+  broker: "homeassistant.local:1883"
+  username: "mqttuser"
+  password: "your-mqtt-password"
+  topic_prefix: "electric_meter"  # Default, can be customized
 ```
+
+**MQTT Configuration:**
+- `enabled`: Set to `true` to enable MQTT publishing
+- `broker`: MQTT broker address with port (e.g., "homeassistant.local:1883")
+- `username`: MQTT username (optional)
+- `password`: MQTT password (optional)
+- `topic_prefix`: Prefix for MQTT topics (default: "electric_meter")
 
 ## Project Structure
 
@@ -136,12 +177,15 @@ gridscraper/
 │   ├── login.go          # Login command
 │   ├── fetch.go          # Fetch command
 │   ├── list.go           # List command
+│   ├── publish.go        # Publish command (MQTT)
 │   └── debug.go          # Debug command
 ├── internal/
 │   ├── config/           # YAML config handling
 │   │   └── config.go
 │   ├── database/         # SQLite operations
 │   │   └── db.go
+│   ├── publisher/        # MQTT publishing
+│   │   └── mqtt.go
 │   └── scraper/          # Scraping logic
 │       ├── browser.go    # Cookie management
 │       └── nyseg.go      # NYSEG scraper
@@ -165,6 +209,7 @@ gridscraper/
 - `github.com/spf13/cobra` - CLI framework
 - `gopkg.in/yaml.v3` - YAML config parsing
 - `modernc.org/sqlite` - Pure Go SQLite driver
+- `github.com/eclipse/paho.mqtt.golang` - MQTT client for Home Assistant
 
 ### Building
 
