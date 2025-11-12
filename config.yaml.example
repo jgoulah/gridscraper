@@ -1,6 +1,9 @@
 # GridScraper Configuration Example
 # Copy this file to config.yaml and customize
 
+# Number of days of historical data to fetch from API (default: 90)
+days_to_fetch: 90
+
 cookies:
   # NYSEG cookies (populated by 'gridscraper login nyseg')
   nyseg: []

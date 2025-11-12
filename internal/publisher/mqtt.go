@@ -1,7 +1,11 @@
 package publisher
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -10,78 +14,132 @@ import (
 	"github.com/jgoulah/gridscraper/pkg/models"
 )
 
-// Publisher handles MQTT publishing to Home Assistant
+// Publisher handles publishing to Home Assistant
 type Publisher struct {
 	client      mqtt.Client
 	topicPrefix string
+	haConfig    config.HAConfig
 }
 
-// New creates a new MQTT publisher
-func New(cfg config.MQTTConfig) (*Publisher, error) {
-	if !cfg.Enabled {
-		return nil, fmt.Errorf("MQTT is not enabled in config")
+// New creates a new publisher (supports both MQTT and HA HTTP API)
+func New(mqttCfg config.MQTTConfig, haCfg config.HAConfig) (*Publisher, error) {
+	// Validate HA config if enabled
+	if haCfg.Enabled {
+		if haCfg.URL == "" {
+			return nil, fmt.Errorf("Home Assistant URL is required when enabled")
+		}
+		if haCfg.Token == "" {
+			return nil, fmt.Errorf("Home Assistant token is required when enabled")
+		}
+		if haCfg.EntityID == "" {
+			return nil, fmt.Errorf("Home Assistant entity_id is required when enabled")
+		}
 	}
 
-	if cfg.Broker == "" {
-		return nil, fmt.Errorf("MQTT broker address is required")
-	}
+	// If MQTT is enabled, set it up (keeping for backwards compatibility)
+	var client mqtt.Client
+	var topicPrefix string
 
-	// Set default topic prefix if not specified
-	topicPrefix := cfg.TopicPrefix
-	if topicPrefix == "" {
-		topicPrefix = "electric_meter"
-	}
+	if mqttCfg.Enabled {
+		if mqttCfg.Broker == "" {
+			return nil, fmt.Errorf("MQTT broker address is required when enabled")
+		}
 
-	// Configure MQTT client options
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s", cfg.Broker))
-	opts.SetClientID("gridscraper")
-	opts.SetAutoReconnect(true)
-	opts.SetConnectRetry(true)
-	opts.SetConnectTimeout(10 * time.Second)
+		// Set default topic prefix if not specified
+		topicPrefix = mqttCfg.TopicPrefix
+		if topicPrefix == "" {
+			topicPrefix = "electric_meter"
+		}
 
-	if cfg.Username != "" {
-		opts.SetUsername(cfg.Username)
-	}
-	if cfg.Password != "" {
-		opts.SetPassword(cfg.Password)
-	}
+		// Configure MQTT client options
+		opts := mqtt.NewClientOptions()
+		opts.AddBroker(fmt.Sprintf("tcp://%s", mqttCfg.Broker))
+		opts.SetClientID("gridscraper")
+		opts.SetAutoReconnect(true)
+		opts.SetConnectRetry(true)
+		opts.SetConnectTimeout(10 * time.Second)
 
-	// Create and connect client
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		return nil, fmt.Errorf("connecting to MQTT broker: %w", token.Error())
+		if mqttCfg.Username != "" {
+			opts.SetUsername(mqttCfg.Username)
+		}
+		if mqttCfg.Password != "" {
+			opts.SetPassword(mqttCfg.Password)
+		}
+
+		// Create and connect client
+		client = mqtt.NewClient(opts)
+		if token := client.Connect(); token.Wait() && token.Error() != nil {
+			return nil, fmt.Errorf("connecting to MQTT broker: %w", token.Error())
+		}
 	}
 
 	return &Publisher{
 		client:      client,
 		topicPrefix: topicPrefix,
+		haConfig:    haCfg,
 	}, nil
 }
 
-// Publish sends a usage reading to MQTT
+// HAPayload matches the Home Assistant backfill service call data
+type HAPayload struct {
+	EntityID    string `json:"entity_id"`
+	State       string `json:"state"`
+	LastChanged string `json:"last_changed"`
+	LastUpdated string `json:"last_updated"`
+}
+
+// Publish sends a usage reading to Home Assistant via HTTP API
 func (p *Publisher) Publish(reading models.UsageData) error {
-	if !p.client.IsConnected() {
-		return fmt.Errorf("MQTT client is not connected")
+	if !p.haConfig.Enabled {
+		return fmt.Errorf("Home Assistant publishing is not enabled in config")
 	}
 
-	// Publish value
-	valueTopic := fmt.Sprintf("%s/value", p.topicPrefix)
-	if token := p.client.Publish(valueTopic, 0, false, fmt.Sprintf("%.2f", reading.KWh)); token.Wait() && token.Error() != nil {
-		return fmt.Errorf("publishing value: %w", token.Error())
+	// Build the full API URL (AppDaemon API endpoint)
+	apiURL := fmt.Sprintf("%s/api/appdaemon/backfill_state", p.haConfig.URL)
+
+	// Determine timestamp to use for last_changed and last_updated
+	var timestamp string
+	if !reading.StartTime.IsZero() {
+		timestamp = reading.StartTime.Format(time.RFC3339)
+	} else {
+		timestamp = reading.Date.Format(time.RFC3339)
 	}
 
-	// Publish unit of measure
-	uomTopic := fmt.Sprintf("%s/uom", p.topicPrefix)
-	if token := p.client.Publish(uomTopic, 0, false, "kWh"); token.Wait() && token.Error() != nil {
-		return fmt.Errorf("publishing uom: %w", token.Error())
+	// Create payload for Home Assistant
+	payload := HAPayload{
+		EntityID:    p.haConfig.EntityID,
+		State:       fmt.Sprintf("%.2f", reading.KWh),
+		LastChanged: timestamp,
+		LastUpdated: timestamp,
 	}
 
-	// Publish start time (the date of the reading in ISO8601 format)
-	startTimeTopic := fmt.Sprintf("%s/startTime", p.topicPrefix)
-	startTime := reading.Date.Format(time.RFC3339)
-	if token := p.client.Publish(startTimeTopic, 0, false, startTime); token.Wait() && token.Error() != nil {
-		return fmt.Errorf("publishing startTime: %w", token.Error())
+	// Marshal to JSON
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encoding payload: %w", err)
+	}
+
+	// Create HTTP request
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.haConfig.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Send request
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		// Read error response body for debugging
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP error: status %d, response: %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil

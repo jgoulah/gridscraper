@@ -41,30 +41,52 @@ func (db *DB) initSchema() error {
 	CREATE TABLE IF NOT EXISTS usage_data (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		date TEXT NOT NULL,
+		start_time TEXT,
+		end_time TEXT,
 		kwh REAL NOT NULL,
 		service TEXT NOT NULL,
 		created_at TEXT NOT NULL,
-		UNIQUE(date, service)
+		published INTEGER DEFAULT 0,
+		UNIQUE(start_time, service)
 	);
 	CREATE INDEX IF NOT EXISTS idx_usage_date ON usage_data(date);
 	CREATE INDEX IF NOT EXISTS idx_usage_service ON usage_data(service);
+	CREATE INDEX IF NOT EXISTS idx_usage_start_time ON usage_data(start_time);
+	CREATE INDEX IF NOT EXISTS idx_usage_published ON usage_data(published);
 	`
 
 	_, err := db.conn.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add columns to existing tables (migration)
+	// These will fail silently if columns already exist
+	db.conn.Exec(`ALTER TABLE usage_data ADD COLUMN start_time TEXT`)
+	db.conn.Exec(`ALTER TABLE usage_data ADD COLUMN end_time TEXT`)
+	db.conn.Exec(`ALTER TABLE usage_data ADD COLUMN published INTEGER DEFAULT 0`)
+
+	return nil
 }
 
 // InsertUsage inserts a usage record, ignoring duplicates
 func (db *DB) InsertUsage(data *models.UsageData) error {
 	query := `
-	INSERT OR IGNORE INTO usage_data (date, kwh, service, created_at)
-	VALUES (?, ?, ?, ?)
+	INSERT OR IGNORE INTO usage_data (date, start_time, end_time, kwh, service, created_at)
+	VALUES (?, ?, ?, ?, ?, ?)
 	`
 
 	dateStr := data.Date.Format("2006-01-02")
+	var startTimeStr, endTimeStr string
+	if !data.StartTime.IsZero() {
+		startTimeStr = data.StartTime.Format("2006-01-02 15:04:05")
+	}
+	if !data.EndTime.IsZero() {
+		endTimeStr = data.EndTime.Format("2006-01-02 15:04:05")
+	}
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 
-	_, err := db.conn.Exec(query, dateStr, data.KWh, data.Service, createdAt)
+	_, err := db.conn.Exec(query, dateStr, startTimeStr, endTimeStr, data.KWh, data.Service, createdAt)
 	if err != nil {
 		return fmt.Errorf("inserting usage data: %w", err)
 	}
@@ -75,7 +97,7 @@ func (db *DB) InsertUsage(data *models.UsageData) error {
 // GetUsage retrieves usage data for a specific date and service
 func (db *DB) GetUsage(date time.Time, service string) (*models.UsageData, error) {
 	query := `
-	SELECT id, date, kwh, service
+	SELECT id, date, start_time, end_time, kwh, service
 	FROM usage_data
 	WHERE date = ? AND service = ?
 	`
@@ -85,8 +107,9 @@ func (db *DB) GetUsage(date time.Time, service string) (*models.UsageData, error
 
 	var data models.UsageData
 	var dateStrResult string
+	var startTimeStr, endTimeStr sql.NullString
 
-	err := row.Scan(&data.ID, &dateStrResult, &data.KWh, &data.Service)
+	err := row.Scan(&data.ID, &dateStrResult, &startTimeStr, &endTimeStr, &data.KWh, &data.Service)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -99,13 +122,27 @@ func (db *DB) GetUsage(date time.Time, service string) (*models.UsageData, error
 		return nil, fmt.Errorf("parsing date: %w", err)
 	}
 
+	if startTimeStr.Valid && startTimeStr.String != "" {
+		data.StartTime, err = time.Parse("2006-01-02 15:04:05", startTimeStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("parsing start_time: %w", err)
+		}
+	}
+
+	if endTimeStr.Valid && endTimeStr.String != "" {
+		data.EndTime, err = time.Parse("2006-01-02 15:04:05", endTimeStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("parsing end_time: %w", err)
+		}
+	}
+
 	return &data, nil
 }
 
 // ListUsage retrieves all usage data for a service, ordered by date
 func (db *DB) ListUsage(service string) ([]models.UsageData, error) {
 	query := `
-	SELECT id, date, kwh, service
+	SELECT id, date, start_time, end_time, kwh, service
 	FROM usage_data
 	WHERE service = ?
 	ORDER BY date DESC
@@ -121,14 +158,29 @@ func (db *DB) ListUsage(service string) ([]models.UsageData, error) {
 	for rows.Next() {
 		var data models.UsageData
 		var dateStr string
+		var startTimeStr, endTimeStr sql.NullString
 
-		if err := rows.Scan(&data.ID, &dateStr, &data.KWh, &data.Service); err != nil {
+		if err := rows.Scan(&data.ID, &dateStr, &startTimeStr, &endTimeStr, &data.KWh, &data.Service); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 
 		data.Date, err = time.Parse("2006-01-02", dateStr)
 		if err != nil {
 			return nil, fmt.Errorf("parsing date: %w", err)
+		}
+
+		if startTimeStr.Valid && startTimeStr.String != "" {
+			data.StartTime, err = time.Parse("2006-01-02 15:04:05", startTimeStr.String)
+			if err != nil {
+				return nil, fmt.Errorf("parsing start_time: %w", err)
+			}
+		}
+
+		if endTimeStr.Valid && endTimeStr.String != "" {
+			data.EndTime, err = time.Parse("2006-01-02 15:04:05", endTimeStr.String)
+			if err != nil {
+				return nil, fmt.Errorf("parsing end_time: %w", err)
+			}
 		}
 
 		results = append(results, data)
@@ -144,4 +196,64 @@ func (db *DB) HasData(date time.Time, service string) (bool, error) {
 		return false, err
 	}
 	return data != nil, nil
+}
+
+// ListUnpublishedUsage retrieves all unpublished usage data for a service, ordered by date
+func (db *DB) ListUnpublishedUsage(service string) ([]models.UsageData, error) {
+	query := `
+	SELECT id, date, start_time, end_time, kwh, service
+	FROM usage_data
+	WHERE service = ? AND published = 0
+	ORDER BY date DESC
+	`
+
+	rows, err := db.conn.Query(query, service)
+	if err != nil {
+		return nil, fmt.Errorf("querying unpublished usage data: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.UsageData
+	for rows.Next() {
+		var data models.UsageData
+		var dateStr string
+		var startTimeStr, endTimeStr sql.NullString
+
+		if err := rows.Scan(&data.ID, &dateStr, &startTimeStr, &endTimeStr, &data.KWh, &data.Service); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+
+		data.Date, err = time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			return nil, fmt.Errorf("parsing date: %w", err)
+		}
+
+		if startTimeStr.Valid && startTimeStr.String != "" {
+			data.StartTime, err = time.Parse("2006-01-02 15:04:05", startTimeStr.String)
+			if err != nil {
+				return nil, fmt.Errorf("parsing start_time: %w", err)
+			}
+		}
+
+		if endTimeStr.Valid && endTimeStr.String != "" {
+			data.EndTime, err = time.Parse("2006-01-02 15:04:05", endTimeStr.String)
+			if err != nil {
+				return nil, fmt.Errorf("parsing end_time: %w", err)
+			}
+		}
+
+		results = append(results, data)
+	}
+
+	return results, rows.Err()
+}
+
+// MarkPublished marks a usage record as published
+func (db *DB) MarkPublished(id int) error {
+	query := `UPDATE usage_data SET published = 1 WHERE id = ?`
+	_, err := db.conn.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("marking record as published: %w", err)
+	}
+	return nil
 }

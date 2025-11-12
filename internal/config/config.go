@@ -10,8 +10,10 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Cookies CookieConfig `yaml:"cookies"`
-	MQTT    MQTTConfig   `yaml:"mqtt,omitempty"`
+	Cookies        CookieConfig `yaml:"cookies"`
+	MQTT           MQTTConfig   `yaml:"mqtt,omitempty"`
+	HomeAssistant  HAConfig     `yaml:"home_assistant,omitempty"`
+	DaysToFetch    int          `yaml:"days_to_fetch,omitempty"` // Number of days to fetch from API (default: 90)
 }
 
 // CookieConfig holds cookies and tokens for different services
@@ -45,6 +47,14 @@ type MQTTConfig struct {
 	Username    string `yaml:"username,omitempty"`
 	Password    string `yaml:"password,omitempty"`
 	TopicPrefix string `yaml:"topic_prefix,omitempty"`
+}
+
+// HAConfig holds Home Assistant HTTP API configuration
+type HAConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	URL      string `yaml:"url"`               // e.g., "http://yourdomain.local:5050"
+	Token    string `yaml:"token"`             // Long-lived access token
+	EntityID string `yaml:"entity_id"`         // e.g., "sensor.nyseg_energy_usage_direct"
 }
 
 // Load reads the config file
@@ -89,4 +99,12 @@ func Save(configPath string, cfg *Config) error {
 // DefaultConfigPath returns the default config file path (local directory)
 func DefaultConfigPath() string {
 	return "config.yaml"
+}
+
+// GetDaysToFetch returns the number of days to fetch with a default of 90 (3 months)
+func (c *Config) GetDaysToFetch() int {
+	if c.DaysToFetch <= 0 {
+		return 90 // Default to 3 months
+	}
+	return c.DaysToFetch
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/jgoulah/gridscraper/internal/config"
 	"github.com/jgoulah/gridscraper/pkg/models"
@@ -70,6 +71,10 @@ func (s *NYSEGDirectScraper) RefreshAuth(ctx context.Context) ([]config.Cookie, 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+		chromedp.Flag("disable-http2", true),
+		chromedp.Flag("disable-quic", true),
+		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -81,24 +86,46 @@ func (s *NYSEGDirectScraper) RefreshAuth(ctx context.Context) ([]config.Cookie, 
 	browserCtx, cancel = context.WithTimeout(browserCtx, 60*time.Second)
 	defer cancel()
 
+	// Set up network monitoring to capture auth token from API requests
+	var capturedAuthToken string
+	var tokenCaptured bool
+	chromedp.ListenTarget(browserCtx, func(ev interface{}) {
+		switch ev := ev.(type) {
+		case *network.EventRequestWillBeSent:
+			// Capture auth token from any request (only capture once)
+			if !tokenCaptured {
+				if authToken, ok := ev.Request.Headers["Up-Authorization"]; ok {
+					if authStr, ok := authToken.(string); ok && authStr != "" {
+						capturedAuthToken = authStr
+						tokenCaptured = true
+					}
+				}
+			}
+		}
+	})
+
 	// Perform login
 	const loginURL = "https://sso.nyseg.com/es/login"
 	if err := chromedp.Run(browserCtx,
+		network.Enable(),
 		chromedp.Navigate(loginURL),
+		chromedp.Sleep(2*time.Second), // Wait for page to fully load
 		chromedp.WaitVisible(`input#_com_liferay_login_web_portlet_LoginPortlet_login`, chromedp.ByQuery),
 		chromedp.SendKeys(`input#_com_liferay_login_web_portlet_LoginPortlet_login`, s.username, chromedp.ByQuery),
 		chromedp.SendKeys(`input#_com_liferay_login_web_portlet_LoginPortlet_password`, s.password, chromedp.ByQuery),
 		chromedp.Sleep(500*time.Millisecond),
 		chromedp.Click(`button[type="submit"]`, chromedp.ByQuery),
-		chromedp.Sleep(3*time.Second),
+		chromedp.Sleep(5*time.Second), // Wait longer for redirect and auth
 	); err != nil {
 		return nil, "", fmt.Errorf("login failed: %w", err)
 	}
 
-	// Navigate to insights to trigger auth
+	// Navigate to insights to trigger API calls that will include the auth token
 	if err := chromedp.Run(browserCtx,
 		chromedp.Navigate(nysegInsightsURL),
+		chromedp.Sleep(3*time.Second), // Wait for page to load
 		chromedp.WaitVisible(`div.engage-insights-explore`, chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second), // Wait for API calls to complete
 	); err != nil {
 		return nil, "", fmt.Errorf("navigating to insights: %w", err)
 	}
@@ -109,41 +136,17 @@ func (s *NYSEGDirectScraper) RefreshAuth(ctx context.Context) ([]config.Cookie, 
 		return nil, "", fmt.Errorf("extracting cookies: %w", err)
 	}
 
-	// Extract auth token
-	var token string
-	if err := chromedp.Run(browserCtx,
-		chromedp.Evaluate(`
-			(function() {
-				const lsToken = localStorage.getItem('up-authorization') ||
-				                localStorage.getItem('auth_token') ||
-				                localStorage.getItem('access_token');
-				if (lsToken) return lsToken;
-
-				const ssToken = sessionStorage.getItem('up-authorization') ||
-				                sessionStorage.getItem('auth_token') ||
-				                sessionStorage.getItem('access_token');
-				if (ssToken) return ssToken;
-
-				if (window.upAuthToken) return window.upAuthToken;
-				if (window.authToken) return window.authToken;
-
-				return null;
-			})()
-		`, &token),
-	); err != nil {
-		return nil, "", fmt.Errorf("extracting token: %w", err)
-	}
-
-	if token == "" || token == "null" {
-		return nil, "", fmt.Errorf("could not find auth token after login")
+	// Use the auth token captured from network requests
+	if capturedAuthToken == "" {
+		return nil, "", fmt.Errorf("could not capture auth token from network requests (did the page load correctly?)")
 	}
 
 	fmt.Println("✓ Authentication refreshed successfully")
-	return freshCookies, token, nil
+	return freshCookies, capturedAuthToken, nil
 }
 
 // Scrape fetches usage data from NYSEG API
-func (s *NYSEGDirectScraper) Scrape(ctx context.Context) ([]models.UsageData, error) {
+func (s *NYSEGDirectScraper) Scrape(ctx context.Context, daysToFetch int) ([]models.UsageData, error) {
 	// If we don't have an auth token, try to get it
 	if s.authToken == "" {
 		if s.username != "" && s.password != "" {
@@ -163,9 +166,12 @@ func (s *NYSEGDirectScraper) Scrape(ctx context.Context) ([]models.UsageData, er
 			s.authToken = token
 		}
 	}
-	// Calculate date range (last 30 days by default)
+	// Calculate date range
+	if daysToFetch <= 0 {
+		daysToFetch = 90 // Default to 90 days (3 months)
+	}
 	endDate := time.Now()
-	startDate := endDate.AddDate(0, -1, 0) // 1 month ago
+	startDate := endDate.AddDate(0, 0, -daysToFetch)
 
 	// Build request URL
 	params := url.Values{}
@@ -368,6 +374,10 @@ func (s *NYSEGDirectScraper) extractAuthTokenFromBrowser(ctx context.Context) (s
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+		chromedp.Flag("disable-http2", true),
+		chromedp.Flag("disable-quic", true),
+		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -434,17 +444,28 @@ func parseNYSEGCSVReader(r io.Reader) ([]models.UsageData, error) {
 
 	// Find column indices
 	dateCol := -1
+	startTimeCol := -1
+	endTimeCol := -1
 	usageCol := -1
+
+	// Debug: print CSV headers
+	fmt.Printf("CSV Headers: %v\n", header)
 
 	for i, col := range header {
 		colLower := strings.ToLower(strings.TrimSpace(col))
 		switch {
-		case strings.Contains(colLower, "date"):
+		case strings.Contains(colLower, "date") && !strings.Contains(colLower, "time"):
 			dateCol = i
+		case strings.Contains(colLower, "start time"):
+			startTimeCol = i
+		case strings.Contains(colLower, "end time"):
+			endTimeCol = i
 		case strings.Contains(colLower, "usage"):
 			usageCol = i
 		}
 	}
+
+	fmt.Printf("Found columns - date: %d, startTime: %d, endTime: %d, usage: %d\n", dateCol, startTimeCol, endTimeCol, usageCol)
 
 	if dateCol == -1 || usageCol == -1 {
 		return nil, fmt.Errorf("could not find required columns (date and usage) in CSV. Header: %v", header)
@@ -452,7 +473,6 @@ func parseNYSEGCSVReader(r io.Reader) ([]models.UsageData, error) {
 
 	// Parse data rows
 	var results []models.UsageData
-	seenDates := make(map[string]bool)
 
 	for {
 		record, err := reader.Read()
@@ -486,23 +506,51 @@ func parseNYSEGCSVReader(r io.Reader) ([]models.UsageData, error) {
 			continue
 		}
 
-		// Aggregate by date (sum all readings for the same day)
-		dateKey := date.Format("2006-01-02")
-		if seenDates[dateKey] {
-			// Find existing record and add to it
-			for i := range results {
-				if results[i].Date.Format("2006-01-02") == dateKey {
-					results[i].KWh += usage
-					break
+		// Parse end time if available
+		var endTime time.Time
+		if endTimeCol != -1 && len(record) > endTimeCol {
+			endTimeStr := strings.TrimSpace(record[endTimeCol])
+			if endTimeStr != "" {
+				endTime, err = parseNYSEGDate(endTimeStr)
+				if err != nil {
+					// Debug: print first few failures
+					if len(results) < 3 {
+						fmt.Printf("Debug: Failed to parse end time '%s': %v\n", endTimeStr, err)
+					}
+					endTime = time.Time{}
+				} else if len(results) < 3 {
+					// Debug: print first few successes
+					fmt.Printf("Debug: Successfully parsed end time '%s' -> %s\n", endTimeStr, endTime.Format("2006-01-02 15:04:05"))
 				}
 			}
-		} else {
-			seenDates[dateKey] = true
-			results = append(results, models.UsageData{
-				Date: date,
-				KWh:  usage,
-			})
 		}
+
+		// Parse start time if available
+		var startTime time.Time
+		if startTimeCol != -1 && len(record) > startTimeCol {
+			startTimeStr := strings.TrimSpace(record[startTimeCol])
+			if startTimeStr != "" {
+				startTime, err = parseNYSEGDate(startTimeStr)
+				if err != nil {
+					// Debug: print first few failures
+					if len(results) < 3 {
+						fmt.Printf("Debug: Failed to parse start time '%s': %v\n", startTimeStr, err)
+					}
+					startTime = time.Time{}
+				} else if len(results) < 3 {
+					// Debug: print first few successes
+					fmt.Printf("Debug: Successfully parsed start time '%s' -> %s\n", startTimeStr, startTime.Format("2006-01-02 15:04:05"))
+				}
+			}
+		}
+
+		// Store each hourly record separately (no aggregation)
+		results = append(results, models.UsageData{
+			Date:      date,
+			StartTime: startTime,
+			EndTime:   endTime,
+			KWh:       usage,
+		})
 	}
 
 	return results, nil

@@ -1,14 +1,16 @@
 # GridScraper
 
-A Go-based CLI tool to scrape electrical usage data from utility websites (NYSEG and Con Edison). Uses browser automation to extract daily kWh data and stores it in a local SQLite database.
+A Go-based CLI tool to scrape electrical usage data from utility websites (NYSEG and Con Edison). Uses browser automation to extract hourly kWh data and stores it in a local SQLite database. Publishes historical data to Home Assistant for detailed energy tracking and analysis.
 
 ## Features
 
-- **Cookie-based authentication**: Login once, scrape multiple times
+- **Automatic authentication**: Configure username/password for automatic login
+- **Hourly usage data**: Fetches detailed hourly kWh readings (24 readings per day)
 - **Browser automation**: Uses chromedp for JavaScript-rendered pages
 - **Duplicate prevention**: Won't re-scrape existing data
 - **SQLite storage**: Local database for tracking usage over time
-- **MQTT publishing**: Send data to Home Assistant via MQTT
+- **Home Assistant integration**: Publishes historical hourly data via AppDaemon
+- **Smart publishing**: Tracks published records to avoid re-uploading
 - **Debug mode**: Inspect pages to troubleshoot scraping issues
 
 ## Installation
@@ -27,38 +29,44 @@ sudo mv gridscraper /usr/local/bin/
 
 ## Usage
 
-### 1. Login and Save Cookies
+### 1. Configure Authentication
 
-First, login to the service to save authentication cookies:
+Add your NYSEG credentials to `config.yaml`:
+
+```yaml
+cookies:
+  nyseg_username: your-username
+  nyseg_password: your-password
+```
+
+The application will automatically log in and refresh authentication as needed when fetching data.
+
+**Alternative: Manual Login** (optional)
+
+If you prefer not to store credentials in the config file, you can manually capture cookies:
 
 ```bash
-# Login to NYSEG
+# Login to NYSEG (opens browser for manual login)
 gridscraper login nyseg
 ```
 
-This will:
-- Open a browser window
-- Navigate to the NYSEG login page
-- Wait for you to manually log in
-- Extract and save cookies to `./config.yaml`
-
-Press Enter after successfully logging in to save the cookies.
+This will open a browser window, wait for you to log in, then extract and save the cookies to `config.yaml`.
 
 ### 2. Fetch Usage Data
 
-Once authenticated, fetch your usage data:
+Fetch your hourly usage data:
 
 ```bash
-# Fetch NYSEG data
+# Fetch NYSEG data (last 90 days by default)
 gridscraper fetch nyseg
 ```
 
 This will:
-- Use saved cookies to access the insights page
-- Click the "month" button to view monthly data
-- Extract daily kWh values from the bar chart
-- Store data in `./data.db`
-- Skip any dates that already exist (duplicate prevention)
+- Automatically log in if needed (using credentials or existing cookies)
+- Download hourly usage data via the NYSEG API
+- Store hourly readings (24 per day) in `./data.db`
+- Skip any timestamps that already exist (duplicate prevention)
+- Fetch the last 90 days by default (configurable via `days_to_fetch` in config)
 
 ### 3. View Stored Data
 
@@ -85,13 +93,153 @@ Date          kWh
 Total: 146.08 kWh (3 records)
 ```
 
-### 4. Publish to MQTT (Home Assistant)
+### 4. Setup Home Assistant Integration
 
-After fetching data, you can publish it to Home Assistant via MQTT:
+To publish your historical hourly data to Home Assistant, you need to set up AppDaemon:
+
+#### 4.1. Install AppDaemon Add-on
+
+1. In Home Assistant, go to **Settings → Add-ons → Add-on Store**
+2. Search for "AppDaemon" and install it
+3. Start the AppDaemon add-on
+
+#### 4.2. Create the Backfill Script
+
+**Find your AppDaemon directory:**
+
+From your Home Assistant host, look for the AppDaemon add-on directory:
+```bash
+ls -la /addon_configs/ | grep appdaemon
+```
+
+It will typically be something like `/addon_configs/a0d7b954_appdaemon/` (where `a0d7b954` is the add-on slug).
+
+**Create the backfill script:**
+
+Create the file `/addon_configs/{addon_slug}_appdaemon/apps/backfill_state.py` with the following content:
+
+```python
+import hassapi as hass
+import sqlite3
+from datetime import datetime
+
+class BackfillState(hass.Hass):
+    def initialize(self):
+        # Register HTTP API endpoint
+        self.register_endpoint(self.api_call, "backfill_state")
+        self.log("Backfill State API endpoint registered at /api/appdaemon/backfill_state")
+
+    def api_call(self, data, **kwargs):
+        """Handle HTTP API calls"""
+        entity_id = data.get("entity_id")
+        state = data.get("state")
+        last_changed = data.get("last_changed")
+        last_updated = data.get("last_updated", last_changed)
+
+        self.log(f"Backfill request: {entity_id} = {state} at {last_changed}")
+
+        if not entity_id or not state or not last_changed:
+            self.log("Missing required parameters", level="WARNING")
+            return {"error": "Missing required parameters"}, 400
+
+        try:
+            conn = sqlite3.connect('/homeassistant/home-assistant_v2.db', timeout=30)
+            cursor = conn.cursor()
+
+            last_changed_dt = datetime.fromisoformat(last_changed.replace('Z', '+00:00'))
+            last_updated_dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
+
+            # Get or create metadata_id
+            cursor.execute("""
+                SELECT metadata_id FROM states_meta
+                WHERE entity_id = ?
+            """, (entity_id,))
+
+            row = cursor.fetchone()
+            if row:
+                metadata_id = row[0]
+            else:
+                cursor.execute("""
+                    INSERT INTO states_meta (entity_id)
+                    VALUES (?)
+                """, (entity_id,))
+                metadata_id = cursor.lastrowid
+
+            # Check for duplicates
+            cursor.execute("""
+                SELECT state_id FROM states
+                WHERE metadata_id = ?
+                AND last_changed_ts = ?
+            """, (metadata_id, last_changed_dt.timestamp()))
+
+            if cursor.fetchone():
+                self.log(f"State already exists for {entity_id} at {last_changed}, skipping")
+                conn.close()
+                return {"status": "skipped", "reason": "duplicate"}, 200
+            else:
+                # Insert new state
+                cursor.execute("""
+                    INSERT INTO states (
+                        metadata_id, state, last_changed_ts, last_updated_ts
+                    )
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    metadata_id,
+                    state,
+                    last_changed_dt.timestamp(),
+                    last_updated_dt.timestamp()
+                ))
+
+                self.log(f"Inserted state for {entity_id}: {state} at {last_changed}")
+
+            conn.commit()
+            conn.close()
+
+            return {"status": "success"}, 200
+
+        except Exception as e:
+            self.log(f"Database error: {str(e)}", level="ERROR")
+            if 'conn' in locals():
+                conn.close()
+            return {"error": str(e)}, 500
+```
+
+#### 4.3. Configure the AppDaemon App
+
+Create or edit `/addon_configs/{addon_slug}_appdaemon/apps/apps.yaml`:
+
+```yaml
+backfill_state:
+  module: backfill_state
+  class: BackfillState
+```
+
+#### 4.4. Enable Home Assistant Recorder
+
+Ensure the recorder is enabled in your Home Assistant `configuration.yaml`:
+
+```yaml
+recorder:
+  db_url: sqlite:////config/home-assistant_v2.db
+  purge_keep_days: 365  # Keep 1 year of history (adjust as needed)
+```
+
+Restart Home Assistant after adding this configuration.
+
+#### 4.5. Restart AppDaemon
+
+Restart the AppDaemon add-on to load the new script. Check the logs to verify you see:
+```
+Backfill State API endpoint registered at /api/appdaemon/backfill_state
+```
+
+### 5. Publish to Home Assistant
+
+After fetching data, publish it to Home Assistant:
 
 ```bash
-# Publish all NYSEG data to MQTT
-gridscraper publish --service nyseg
+# Publish all unpublished NYSEG data
+gridscraper publish --service nyseg --all
 
 # Publish data from the last 7 days
 gridscraper publish --service nyseg --since 7d
@@ -99,16 +247,17 @@ gridscraper publish --service nyseg --since 7d
 # Publish specific date range
 gridscraper publish --service nyseg --since 2024-01-01 --until 2024-01-31
 
-# Publish all services
-gridscraper publish --all
+# Publish limited number of records (for testing)
+gridscraper publish --service nyseg --limit 10
 ```
 
-This will publish to the following MQTT topics:
-- `electric_meter/value` - The kWh reading (e.g., "45.23")
-- `electric_meter/uom` - Unit of measure ("kWh")
-- `electric_meter/startTime` - ISO8601 timestamp of the reading
+The publish command:
+- Only publishes records that haven't been published yet (tracked in local database)
+- Sends hourly kWh readings to Home Assistant with proper timestamps
+- Marks each record as published after successful upload
+- Subsequent `--all` runs are instant if there's no new data
 
-**Note**: MQTT must be configured in `config.yaml` first (see Configuration section below).
+**Note**: Home Assistant integration must be configured in `config.yaml` first (see Configuration section below).
 
 ### 5. Debug Scraping Issues
 
@@ -141,7 +290,15 @@ Override with: `--db /path/to/data.db`
 ### Config File Format
 
 ```yaml
+# Number of days of historical data to fetch from API (default: 90)
+days_to_fetch: 90
+
 cookies:
+  # Automatic authentication (recommended)
+  nyseg_username: your-username
+  nyseg_password: your-password
+
+  # Or manual cookie-based auth (optional)
   nyseg:
     - name: session_id
       value: abc123...
@@ -149,23 +306,31 @@ cookies:
       path: /
       httpOnly: true
       secure: true
+
+  coned_username: your-username
+  coned_password: your-password
   coned: []
 
-# Optional: MQTT configuration for Home Assistant
-mqtt:
+# Home Assistant configuration
+home_assistant:
   enabled: true
-  broker: "homeassistant.local:1883"
-  username: "mqttuser"
-  password: "your-mqtt-password"
-  topic_prefix: "electric_meter"  # Default, can be customized
+  url: "http://yourdomain.local:5050"  # AppDaemon port, not HA port (8123)
+  token: "your-long-lived-access-token"
+  entity_id: "sensor.nyseg_energy_usage_direct"  # The sensor entity to populate
 ```
 
-**MQTT Configuration:**
-- `enabled`: Set to `true` to enable MQTT publishing
-- `broker`: MQTT broker address with port (e.g., "homeassistant.local:1883")
-- `username`: MQTT username (optional)
-- `password`: MQTT password (optional)
-- `topic_prefix`: Prefix for MQTT topics (default: "electric_meter")
+**Configuration Options:**
+- `days_to_fetch`: Number of days of historical data to fetch from the API (default: 90 days / 3 months)
+
+**Authentication:**
+- `nyseg_username` / `nyseg_password`: Credentials for automatic login (recommended)
+- `nyseg` cookies: Alternative cookie-based authentication (captured via `login` command)
+
+**Home Assistant Configuration:**
+- `enabled`: Set to `true` to enable Home Assistant publishing
+- `url`: AppDaemon URL with port 5050 (not the Home Assistant port 8123)
+- `token`: Long-lived access token from Home Assistant (Settings → Profile → Long-Lived Access Tokens)
+- `entity_id`: The sensor entity ID to populate with historical data
 
 ## Project Structure
 

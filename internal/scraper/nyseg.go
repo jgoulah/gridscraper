@@ -34,7 +34,7 @@ func NewNYSEGScraper(cookies []config.Cookie, visible bool) *NYSEGScraper {
 }
 
 // Scrape fetches usage data from NYSEG by downloading CSV
-func (s *NYSEGScraper) Scrape(ctx context.Context) ([]models.UsageData, error) {
+func (s *NYSEGScraper) Scrape(ctx context.Context, daysToFetch int) ([]models.UsageData, error) {
 	// Create temp directory for downloads
 	downloadDir, err := os.MkdirTemp("", "gridscraper-*")
 	if err != nil {
@@ -256,8 +256,11 @@ func parseNYSEGCSV(path string) ([]models.UsageData, error) {
 func parseNYSEGDate(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 
-	// Try various date formats that NYSEG might use
+	// Try various date/time formats that NYSEG might use
 	formats := []string{
+		"2006-01-02 15:04:05-07:00",  // ISO 8601 with timezone (End Time column)
+		"2006-01-02T15:04:05-07:00",  // ISO 8601 variant
+		"2006-01-02 15:04:05",        // Datetime without timezone
 		"1/2/2006",
 		"01/02/2006",
 		"2006-01-02",
