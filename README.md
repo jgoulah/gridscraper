@@ -342,14 +342,14 @@ gridscraper/
 │   ├── login.go          # Login command
 │   ├── fetch.go          # Fetch command
 │   ├── list.go           # List command
-│   ├── publish.go        # Publish command (MQTT)
+│   ├── publish.go        # Publish command (Home Assistant)
 │   └── debug.go          # Debug command
 ├── internal/
 │   ├── config/           # YAML config handling
 │   │   └── config.go
 │   ├── database/         # SQLite operations
 │   │   └── db.go
-│   ├── publisher/        # MQTT publishing
+│   ├── publisher/        # Home Assistant publishing
 │   │   └── mqtt.go
 │   └── scraper/          # Scraping logic
 │       ├── browser.go    # Cookie management
@@ -374,7 +374,6 @@ gridscraper/
 - `github.com/spf13/cobra` - CLI framework
 - `gopkg.in/yaml.v3` - YAML config parsing
 - `modernc.org/sqlite` - Pure Go SQLite driver
-- `github.com/eclipse/paho.mqtt.golang` - MQTT client for Home Assistant
 
 ### Building
 

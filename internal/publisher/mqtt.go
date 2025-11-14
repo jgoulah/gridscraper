@@ -8,21 +8,17 @@ import (
 	"net/http"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
-
 	"github.com/jgoulah/gridscraper/internal/config"
 	"github.com/jgoulah/gridscraper/pkg/models"
 )
 
 // Publisher handles publishing to Home Assistant
 type Publisher struct {
-	client      mqtt.Client
-	topicPrefix string
-	haConfig    config.HAConfig
+	haConfig config.HAConfig
 }
 
-// New creates a new publisher (supports both MQTT and HA HTTP API)
-func New(mqttCfg config.MQTTConfig, haCfg config.HAConfig) (*Publisher, error) {
+// New creates a new publisher for Home Assistant
+func New(haCfg config.HAConfig) (*Publisher, error) {
 	// Validate HA config if enabled
 	if haCfg.Enabled {
 		if haCfg.URL == "" {
@@ -36,47 +32,8 @@ func New(mqttCfg config.MQTTConfig, haCfg config.HAConfig) (*Publisher, error) {
 		}
 	}
 
-	// If MQTT is enabled, set it up (keeping for backwards compatibility)
-	var client mqtt.Client
-	var topicPrefix string
-
-	if mqttCfg.Enabled {
-		if mqttCfg.Broker == "" {
-			return nil, fmt.Errorf("MQTT broker address is required when enabled")
-		}
-
-		// Set default topic prefix if not specified
-		topicPrefix = mqttCfg.TopicPrefix
-		if topicPrefix == "" {
-			topicPrefix = "electric_meter"
-		}
-
-		// Configure MQTT client options
-		opts := mqtt.NewClientOptions()
-		opts.AddBroker(fmt.Sprintf("tcp://%s", mqttCfg.Broker))
-		opts.SetClientID("gridscraper")
-		opts.SetAutoReconnect(true)
-		opts.SetConnectRetry(true)
-		opts.SetConnectTimeout(10 * time.Second)
-
-		if mqttCfg.Username != "" {
-			opts.SetUsername(mqttCfg.Username)
-		}
-		if mqttCfg.Password != "" {
-			opts.SetPassword(mqttCfg.Password)
-		}
-
-		// Create and connect client
-		client = mqtt.NewClient(opts)
-		if token := client.Connect(); token.Wait() && token.Error() != nil {
-			return nil, fmt.Errorf("connecting to MQTT broker: %w", token.Error())
-		}
-	}
-
 	return &Publisher{
-		client:      client,
-		topicPrefix: topicPrefix,
-		haConfig:    haCfg,
+		haConfig: haCfg,
 	}, nil
 }
 
@@ -145,9 +102,3 @@ func (p *Publisher) Publish(reading models.UsageData) error {
 	return nil
 }
 
-// Close disconnects from the MQTT broker
-func (p *Publisher) Close() {
-	if p.client != nil && p.client.IsConnected() {
-		p.client.Disconnect(250)
-	}
-}

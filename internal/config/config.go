@@ -11,7 +11,6 @@ import (
 // Config holds the application configuration
 type Config struct {
 	Cookies        CookieConfig `yaml:"cookies"`
-	MQTT           MQTTConfig   `yaml:"mqtt,omitempty"`
 	HomeAssistant  HAConfig     `yaml:"home_assistant,omitempty"`
 	DaysToFetch    int          `yaml:"days_to_fetch,omitempty"` // Number of days to fetch from API (default: 90)
 }
@@ -38,15 +37,6 @@ type Cookie struct {
 	HTTPOnly bool    `yaml:"httpOnly,omitempty"`
 	Secure   bool    `yaml:"secure,omitempty"`
 	SameSite string  `yaml:"sameSite,omitempty"`
-}
-
-// MQTTConfig holds MQTT broker configuration for Home Assistant
-type MQTTConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	Broker      string `yaml:"broker"`
-	Username    string `yaml:"username,omitempty"`
-	Password    string `yaml:"password,omitempty"`
-	TopicPrefix string `yaml:"topic_prefix,omitempty"`
 }
 
 // HAConfig holds Home Assistant HTTP API configuration

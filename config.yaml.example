@@ -17,10 +17,9 @@ cookies:
   coned_username: ""
   coned_password: ""
 
-# MQTT Configuration for Home Assistant
-mqtt:
+# Home Assistant Configuration
+home_assistant:
   enabled: true
-  broker: "homeassistant.local:1883"
-  username: "mqttuser"
-  password: "your-mqtt-password-here"
-  topic_prefix: "electric_meter"
+  url: "http://yourdomain.local:5050"  # AppDaemon port
+  token: "your-long-lived-access-token"
+  entity_id: "sensor.nyseg_energy_usage"
