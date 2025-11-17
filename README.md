@@ -11,6 +11,8 @@ A Go-based CLI tool to scrape electrical usage data from utility websites (NYSEG
 - **SQLite storage**: Local database for tracking usage over time
 - **Home Assistant integration**: Publishes historical hourly data via AppDaemon
 - **Smart publishing**: Tracks published records to avoid re-uploading
+- **Statistics generation**: Automatic compilation for Home Assistant Energy dashboard
+- **Automated sync**: Daily cron script for fetch → publish → statistics workflow
 - **Debug mode**: Inspect pages to troubleshoot scraping issues
 
 ## Installation
@@ -21,11 +23,13 @@ git clone https://github.com/jgoulah/gridscraper.git
 cd gridscraper
 
 # Build the binary
-go build -o gridscraper ./cmd/gridscraper
+make build
 
-# Optional: Install to your PATH
-sudo mv gridscraper /usr/local/bin/
+# Optional: Install to system (installs binary and sync script)
+sudo make install
 ```
+
+See the Makefile for additional targets (`make help`).
 
 ## Usage
 
@@ -116,93 +120,11 @@ It will typically be something like `/addon_configs/a0d7b954_appdaemon/` (where 
 
 **Create the backfill script:**
 
-Create the file `/addon_configs/{addon_slug}_appdaemon/apps/backfill_state.py` with the following content:
+Copy the template script from `scripts/appdaemon/backfill_state.py` in this repository to `/addon_configs/{addon_slug}_appdaemon/apps/backfill_state.py` on your Home Assistant host.
 
-```python
-import hassapi as hass
-import sqlite3
-from datetime import datetime
-
-class BackfillState(hass.Hass):
-    def initialize(self):
-        # Register HTTP API endpoint
-        self.register_endpoint(self.api_call, "backfill_state")
-        self.log("Backfill State API endpoint registered at /api/appdaemon/backfill_state")
-
-    def api_call(self, data, **kwargs):
-        """Handle HTTP API calls"""
-        entity_id = data.get("entity_id")
-        state = data.get("state")
-        last_changed = data.get("last_changed")
-        last_updated = data.get("last_updated", last_changed)
-
-        self.log(f"Backfill request: {entity_id} = {state} at {last_changed}")
-
-        if not entity_id or not state or not last_changed:
-            self.log("Missing required parameters", level="WARNING")
-            return {"error": "Missing required parameters"}, 400
-
-        try:
-            conn = sqlite3.connect('/homeassistant/home-assistant_v2.db', timeout=30)
-            cursor = conn.cursor()
-
-            last_changed_dt = datetime.fromisoformat(last_changed.replace('Z', '+00:00'))
-            last_updated_dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
-
-            # Get or create metadata_id
-            cursor.execute("""
-                SELECT metadata_id FROM states_meta
-                WHERE entity_id = ?
-            """, (entity_id,))
-
-            row = cursor.fetchone()
-            if row:
-                metadata_id = row[0]
-            else:
-                cursor.execute("""
-                    INSERT INTO states_meta (entity_id)
-                    VALUES (?)
-                """, (entity_id,))
-                metadata_id = cursor.lastrowid
-
-            # Check for duplicates
-            cursor.execute("""
-                SELECT state_id FROM states
-                WHERE metadata_id = ?
-                AND last_changed_ts = ?
-            """, (metadata_id, last_changed_dt.timestamp()))
-
-            if cursor.fetchone():
-                self.log(f"State already exists for {entity_id} at {last_changed}, skipping")
-                conn.close()
-                return {"status": "skipped", "reason": "duplicate"}, 200
-            else:
-                # Insert new state
-                cursor.execute("""
-                    INSERT INTO states (
-                        metadata_id, state, last_changed_ts, last_updated_ts
-                    )
-                    VALUES (?, ?, ?, ?)
-                """, (
-                    metadata_id,
-                    state,
-                    last_changed_dt.timestamp(),
-                    last_updated_dt.timestamp()
-                ))
-
-                self.log(f"Inserted state for {entity_id}: {state} at {last_changed}")
-
-            conn.commit()
-            conn.close()
-
-            return {"status": "success"}, 200
-
-        except Exception as e:
-            self.log(f"Database error: {str(e)}", level="ERROR")
-            if 'conn' in locals():
-                conn.close()
-            return {"error": str(e)}, 500
-```
+This script provides two HTTP endpoints:
+- `/api/appdaemon/backfill_state` - Stores individual hourly consumption values
+- `/api/appdaemon/generate_statistics` - Generates statistics for the Energy dashboard
 
 #### 4.3. Configure the AppDaemon App
 
@@ -230,7 +152,9 @@ Restart Home Assistant after adding this configuration.
 
 Restart the AppDaemon add-on to load the new script. Check the logs to verify you see:
 ```
-Backfill State API endpoint registered at /api/appdaemon/backfill_state
+Backfill State API endpoints registered:
+  - /api/appdaemon/backfill_state
+  - /api/appdaemon/generate_statistics
 ```
 
 ### 5. Publish to Home Assistant
@@ -266,7 +190,70 @@ The publish command:
 
 **Note**: Home Assistant integration must be configured in `config.yaml` first (see Configuration section below).
 
-### 5. Debug Scraping Issues
+### 6. Generate Statistics for Energy Dashboard
+
+After publishing data to Home Assistant, you need to generate statistics for the Energy dashboard:
+
+```bash
+# Generate statistics from published states
+gridscraper generate-stats
+```
+
+This command:
+- Calls the AppDaemon `generate_statistics` endpoint
+- Compiles hourly statistics from individual consumption values
+- Populates the Home Assistant statistics tables for the Energy dashboard
+- Reads entity_id and AppDaemon URL from your `config.yaml`
+
+### 7. Automated Daily Sync
+
+For automated daily data fetching and publishing, use the provided sync script and Makefile:
+
+#### 7.1. Install via Makefile
+
+```bash
+# Build and install the binary and sync script
+sudo make install
+```
+
+This installs:
+- `/usr/local/bin/gridscraper` - the main binary
+- `/usr/local/bin/gridscraper-sync.sh` - automated sync script
+
+#### 7.2. Setup Configuration Files
+
+Copy your configuration and database to the standard location:
+
+```bash
+sudo mkdir -p /usr/local/etc/gridscraper
+sudo cp config.yaml /usr/local/etc/gridscraper/config.yaml
+sudo cp data.db /usr/local/etc/gridscraper/data.db
+```
+
+**Important**: Update `days_to_fetch` in your production `config.yaml`:
+
+```yaml
+days_to_fetch: 15  # Fetch last 15 days (with buffer for data lag and missed runs)
+```
+
+#### 7.3. Schedule with Cron
+
+Add to your crontab:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add this line (runs daily at 6 AM)
+0 6 * * * /usr/local/bin/gridscraper-sync.sh >> /usr/local/etc/gridscraper/gridscraper.log 2>&1
+```
+
+The sync script automatically:
+1. Fetches new data from NYSEG
+2. Publishes new records to Home Assistant
+3. Generates statistics for the Energy dashboard
+
+### 8. Debug Scraping Issues
 
 If data extraction fails, use debug mode:
 
@@ -343,26 +330,32 @@ home_assistant:
 
 ```
 gridscraper/
-├── cmd/gridscraper/       # CLI commands
-│   ├── main.go           # Entry point
-│   ├── root.go           # Root command & shared logic
-│   ├── login.go          # Login command
-│   ├── fetch.go          # Fetch command
-│   ├── list.go           # List command
-│   ├── publish.go        # Publish command (Home Assistant)
-│   └── debug.go          # Debug command
+├── cmd/gridscraper/           # CLI commands
+│   ├── main.go               # Entry point
+│   ├── root.go               # Root command & shared logic
+│   ├── login.go              # Login command
+│   ├── fetch.go              # Fetch command
+│   ├── list.go               # List command
+│   ├── publish.go            # Publish command (Home Assistant)
+│   ├── generate_stats.go     # Generate statistics command
+│   └── debug.go              # Debug command
 ├── internal/
-│   ├── config/           # YAML config handling
+│   ├── config/               # YAML config handling
 │   │   └── config.go
-│   ├── database/         # SQLite operations
+│   ├── database/             # SQLite operations
 │   │   └── db.go
-│   ├── publisher/        # Home Assistant publishing
+│   ├── publisher/            # Home Assistant publishing
 │   │   └── mqtt.go
-│   └── scraper/          # Scraping logic
-│       ├── browser.go    # Cookie management
-│       └── nyseg.go      # NYSEG scraper
-├── pkg/models/           # Data models
+│   └── scraper/              # Scraping logic
+│       ├── browser.go        # Cookie management
+│       └── nyseg.go          # NYSEG scraper
+├── pkg/models/               # Data models
 │   └── usage.go
+├── scripts/
+│   ├── appdaemon/            # AppDaemon scripts for Home Assistant
+│   │   └── backfill_state.py
+│   └── gridscraper-sync.sh   # Automated daily sync script
+├── Makefile                  # Build automation
 ├── go.mod
 ├── go.sum
 └── README.md
@@ -385,7 +378,14 @@ gridscraper/
 ### Building
 
 ```bash
-go build -o gridscraper ./cmd/gridscraper
+# Build binary
+make build
+
+# Build and install to system
+sudo make install
+
+# Clean build artifacts
+make clean
 ```
 
 ### Running Tests

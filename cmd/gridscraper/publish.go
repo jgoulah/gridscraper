@@ -137,11 +137,11 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Limiting to %d records (--limit flag)\n", publishLimit)
 		}
 
-		// Publish each record
+		// Publish each record with individual hourly consumption values
 		fmt.Printf("Publishing %d records for %s...\n", len(filteredData), service)
 		published := 0
 		for i, record := range filteredData {
-			fmt.Printf("[%d/%d] Publishing %s (%.2f kWh)... ", i+1, len(filteredData), record.Date.Format("2006-01-02"), record.KWh)
+			fmt.Printf("[%d/%d] Publishing %s (%.2f kWh)... ", i+1, len(filteredData), record.StartTime.Format("2006-01-02 15:04"), record.KWh)
 			if err := pub.Publish(record); err != nil {
 				fmt.Printf("FAILED: %v\n", err)
 				continue

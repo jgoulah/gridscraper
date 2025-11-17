@@ -143,8 +143,9 @@ func runFetch(cmd *cobra.Command, args []string) error {
 			fmt.Println("✓ Credentials refreshed and saved")
 		}
 
-		// Retry scrape with fresh credentials
+		// Create a fresh scraper with the new credentials
 		fmt.Println("Retrying fetch with fresh credentials...")
+		nysegScraper = scraper.NewNYSEGDirectScraperWithCredentials(freshCookies, freshToken, username, password)
 		data, err = nysegScraper.Scrape(ctx, daysToFetch)
 
 		if err != nil {
