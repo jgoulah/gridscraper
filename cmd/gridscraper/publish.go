@@ -34,6 +34,8 @@ func init() {
 }
 
 func runPublish(cmd *cobra.Command, args []string) error {
+	fmt.Printf("=== Publish started at %s ===\n", time.Now().Format("2006-01-02 15:04:05 MST"))
+
 	// Load config
 	cfg, err := loadConfig()
 	if err != nil {

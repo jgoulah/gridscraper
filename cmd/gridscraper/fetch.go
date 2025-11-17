@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jgoulah/gridscraper/internal/config"
 	"github.com/jgoulah/gridscraper/internal/scraper"
@@ -28,6 +29,8 @@ func init() {
 }
 
 func runFetch(cmd *cobra.Command, args []string) error {
+	fmt.Printf("=== Fetch started at %s ===\n", time.Now().Format("2006-01-02 15:04:05 MST"))
+
 	service := args[0]
 
 	// Validate service
