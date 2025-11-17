@@ -238,7 +238,13 @@ Backfill State API endpoint registered at /api/appdaemon/backfill_state
 After fetching data, publish it to Home Assistant:
 
 ```bash
-# Publish all unpublished NYSEG data
+# Publish unpublished NYSEG data (default behavior)
+gridscraper publish --service nyseg
+
+# Publish to all services (nyseg and coned)
+gridscraper publish
+
+# Force republish ALL nyseg data (ignoring published flag)
 gridscraper publish --service nyseg --all
 
 # Publish data from the last 7 days
@@ -252,10 +258,11 @@ gridscraper publish --service nyseg --limit 10
 ```
 
 The publish command:
-- Only publishes records that haven't been published yet (tracked in local database)
+- By default, only publishes records that haven't been published yet (tracked in local database)
+- Use `--all` flag to force republish all records (ignoring published status)
 - Sends hourly kWh readings to Home Assistant with proper timestamps
 - Marks each record as published after successful upload
-- Subsequent `--all` runs are instant if there's no new data
+- Subsequent runs without `--all` are instant if there's no new data
 
 **Note**: Home Assistant integration must be configured in `config.yaml` first (see Configuration section below).
 

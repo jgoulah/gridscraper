@@ -1,9 +1,9 @@
 # Config and data files (contain sensitive cookies and personal data)
 config.yaml
-data.db
+data.db*
 
-# Binary
-gridscraper
+# Binary (only in root directory)
+/gridscraper
 
 # Go build artifacts
 *.exe
