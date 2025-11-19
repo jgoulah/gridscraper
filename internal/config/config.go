@@ -13,7 +13,9 @@ type Config struct {
 	Cookies              CookieConfig `yaml:"cookies"`
 	HomeAssistant        HAConfig     `yaml:"home_assistant,omitempty"`
 	ConEdHomeAssistant   HAConfig     `yaml:"coned_home_assistant,omitempty"`
-	DaysToFetch          int          `yaml:"days_to_fetch,omitempty"` // Number of days to fetch from API (default: 90)
+	DaysToFetch          int          `yaml:"days_to_fetch,omitempty"`         // Global default (fallback: 90)
+	NYSEGDaysToFetch     int          `yaml:"nyseg_days_to_fetch,omitempty"`   // NYSEG-specific override
+	ConEdDaysToFetch     int          `yaml:"coned_days_to_fetch,omitempty"`   // ConEd-specific override
 }
 
 // CookieConfig holds cookies and tokens for different services
@@ -100,4 +102,20 @@ func (c *Config) GetDaysToFetch() int {
 		return 90 // Default to 3 months
 	}
 	return c.DaysToFetch
+}
+
+// GetNYSEGDaysToFetch returns NYSEG-specific days to fetch, falling back to global setting
+func (c *Config) GetNYSEGDaysToFetch() int {
+	if c.NYSEGDaysToFetch > 0 {
+		return c.NYSEGDaysToFetch
+	}
+	return c.GetDaysToFetch()
+}
+
+// GetConEdDaysToFetch returns ConEd-specific days to fetch, falling back to global setting
+func (c *Config) GetConEdDaysToFetch() int {
+	if c.ConEdDaysToFetch > 0 {
+		return c.ConEdDaysToFetch
+	}
+	return c.GetDaysToFetch()
 }

@@ -78,7 +78,14 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	// Create scraper based on service
 	ctx := context.Background()
 	var data []models.UsageData
-	daysToFetch := cfg.GetDaysToFetch()
+
+	// Get service-specific days to fetch
+	var daysToFetch int
+	if service == "nyseg" {
+		daysToFetch = cfg.GetNYSEGDaysToFetch()
+	} else {
+		daysToFetch = cfg.GetConEdDaysToFetch()
+	}
 
 	if service == "nyseg" {
 		// NYSEG scraper with auth token

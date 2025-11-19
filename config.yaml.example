@@ -2,7 +2,11 @@
 # Copy this file to config.yaml and customize
 
 # Number of days of historical data to fetch from API (default: 90)
-days_to_fetch: 90
+days_to_fetch: 90  # Global default for all services
+
+# Service-specific overrides (optional - falls back to days_to_fetch if not set)
+nyseg_days_to_fetch: 90    # NYSEG-specific days to fetch
+coned_days_to_fetch: 15    # ConEd-specific days to fetch
 
 cookies:
   # NYSEG cookies (populated by 'gridscraper login nyseg')
