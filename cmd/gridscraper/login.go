@@ -34,7 +34,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	case "nyseg":
 		loginURL = "https://energymanager.nyseg.com/insights"
 	case "coned":
-		return fmt.Errorf("Con Edison support not yet implemented")
+		loginURL = "https://www.coned.com/en/login"
 	default:
 		return fmt.Errorf("unknown service: %s (available: nyseg, coned)", service)
 	}

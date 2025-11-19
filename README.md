@@ -52,9 +52,14 @@ If you prefer not to store credentials in the config file, you can manually capt
 ```bash
 # Login to NYSEG (opens browser for manual login)
 gridscraper login nyseg
+
+# Login to Con Edison (opens browser for manual login)
+gridscraper login coned
 ```
 
 This will open a browser window, wait for you to log in, then extract and save the cookies to `config.yaml`.
+
+**Con Edison Note**: For automatic login, you'll also need to configure the security challenge answer in `config.yaml`.
 
 ### 2. Fetch Usage Data
 
@@ -63,25 +68,32 @@ Fetch your hourly usage data:
 ```bash
 # Fetch NYSEG data (last 90 days by default)
 gridscraper fetch nyseg
+
+# Fetch Con Edison data
+gridscraper fetch coned
 ```
 
 This will:
 - Automatically log in if needed (using credentials or existing cookies)
-- Download hourly usage data via the NYSEG API
+- Download hourly usage data (NYSEG: API calls, Con Edison: CSV export via browser automation)
 - Store hourly readings (24 per day) in `./data.db`
 - Skip any timestamps that already exist (duplicate prevention)
 - Fetch the last 90 days by default (configurable via `days_to_fetch` in config)
+- For Con Edison: Downloads 15-minute intervals and aggregates to hourly data
 
 ### 3. View Stored Data
 
 List all stored usage data:
 
 ```bash
-# View all data
+# View all data (all services)
 gridscraper list
 
 # View only NYSEG data
 gridscraper list --service nyseg
+
+# View only Con Edison data
+gridscraper list --service coned
 ```
 
 Output example:
@@ -218,7 +230,8 @@ sudo make install
 
 This installs:
 - `/usr/local/bin/gridscraper` - the main binary
-- `/usr/local/bin/gridscraper-sync.sh` - automated sync script
+- `/usr/local/bin/gridscraper-sync.sh` - NYSEG automated sync script
+- `/usr/local/bin/gridscraper-sync-coned.sh` - Con Edison automated sync script
 
 #### 7.2. Setup Configuration Files
 
@@ -244,13 +257,16 @@ Add to your crontab:
 # Edit crontab
 crontab -e
 
-# Add this line (runs daily at 6 AM)
-0 6 * * * /usr/local/bin/gridscraper-sync.sh >> /usr/local/etc/gridscraper/gridscraper.log 2>&1
+# Add for NYSEG (runs daily at 6 AM)
+0 6 * * * /usr/local/bin/gridscraper-sync.sh >> /usr/local/etc/gridscraper/nyseg.log 2>&1
+
+# Add for Con Edison (runs daily at 6 AM)
+0 6 * * * /usr/local/bin/gridscraper-sync-coned.sh >> /usr/local/etc/gridscraper/coned.log 2>&1
 ```
 
-The sync script automatically:
-1. Fetches new data from NYSEG
-2. Publishes new records to Home Assistant
+Each sync script automatically:
+1. Fetches new data from the utility
+2. Publishes new records to the appropriate Home Assistant instance
 3. Generates statistics for the Energy dashboard
 
 ### 8. Debug Scraping Issues
@@ -400,12 +416,18 @@ go test ./...
 
 - **Status**: Implemented
 - **URL**: https://energymanager.nyseg.com/insights
-- **Data**: Daily kWh usage from monthly view
+- **Data**: Hourly kWh usage (24 readings/day)
+- **Method**: Direct API calls with browser authentication
+- **Home Assistant**: Single instance support
 
-### Con Edison
+### Con Edison (NYC)
 
-- **Status**: Planned (not yet implemented)
-- **URL**: TBD
+- **Status**: Implemented
+- **URL**: https://www.coned.com/en/accounts-billing/my-account/energy-use
+- **Data**: 15-minute interval data (96 readings/day), aggregated to hourly
+- **Method**: Browser automation with CSV export
+- **Authentication**: Username, password, and security challenge question
+- **Home Assistant**: Separate instance support (can use different HA server)
 
 ## Troubleshooting
 

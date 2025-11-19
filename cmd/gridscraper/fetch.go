@@ -7,6 +7,7 @@ import (
 
 	"github.com/jgoulah/gridscraper/internal/config"
 	"github.com/jgoulah/gridscraper/internal/scraper"
+	"github.com/jgoulah/gridscraper/pkg/models"
 	"github.com/spf13/cobra"
 )
 
@@ -38,10 +39,6 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown service: %s (available: nyseg, coned)", service)
 	}
 
-	if service == "coned" {
-		return fmt.Errorf("Con Edison support not yet implemented")
-	}
-
 	// Load config
 	cfg, err := loadConfig()
 	if err != nil {
@@ -50,7 +47,7 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 	// Get cookies, auth token, and credentials for service
 	var cookies []config.Cookie
-	var authToken, username, password string
+	var authToken, customerUUID, username, password, challengeAnswer string
 	switch service {
 	case "nyseg":
 		cookies = cfg.Cookies.NYSEG
@@ -60,8 +57,10 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	case "coned":
 		cookies = cfg.Cookies.ConEd
 		authToken = cfg.Cookies.ConEdAuthToken
+		customerUUID = cfg.Cookies.ConEdCustomerUUID
 		username = cfg.Cookies.ConEdUsername
 		password = cfg.Cookies.ConEdPassword
+		challengeAnswer = cfg.Cookies.ConEdChallengeAnswer
 	}
 
 	// Check if we have either cookies+token OR username+password for auto-auth
@@ -76,84 +75,103 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	// Create scraper with credentials for auto-auth
-	var nysegScraper *scraper.NYSEGDirectScraper
-	switch service {
-	case "nyseg":
-		nysegScraper = scraper.NewNYSEGDirectScraperWithCredentials(cookies, authToken, username, password)
-	default:
-		return fmt.Errorf("scraper not implemented for %s", service)
-	}
-
-	// If we have username/password but no cookies, do proactive login
+	// Create scraper based on service
 	ctx := context.Background()
-	if len(cookies) == 0 && username != "" && password != "" {
-		fmt.Println("No cookies found, performing initial login...")
-		freshCookies, freshToken, err := nysegScraper.RefreshAuth(ctx)
-		if err != nil {
-			return fmt.Errorf("initial login failed: %w", err)
-		}
-
-		// Save credentials
-		switch service {
-		case "nyseg":
-			cfg.Cookies.NYSEG = freshCookies
-			cfg.Cookies.NYSEGAuthToken = freshToken
-		case "coned":
-			cfg.Cookies.ConEd = freshCookies
-			cfg.Cookies.ConEdAuthToken = freshToken
-		}
-
-		if err := saveConfig(cfg); err != nil {
-			fmt.Printf("Warning: Could not save credentials: %v\n", err)
-		} else {
-			fmt.Println("✓ Login successful, credentials saved")
-		}
-	}
-
-	// Scrape data with automatic auth refresh on failure
+	var data []models.UsageData
 	daysToFetch := cfg.GetDaysToFetch()
-	fmt.Printf("Fetching data from %s (last %d days)...\n", service, daysToFetch)
-	data, err := nysegScraper.Scrape(ctx, daysToFetch)
 
-	// If scraping failed and we have credentials, try refreshing auth and retry
-	// This handles auth errors, expired tokens, and protocol errors from bad auth
-	if err != nil && username != "" && password != "" {
-		fmt.Printf("⚠ Scraping failed: %v\n", err)
-		fmt.Printf("⚠ Attempting to refresh credentials and retry...\n")
+	if service == "nyseg" {
+		// NYSEG scraper with auth token
+		nysegScraper := scraper.NewNYSEGDirectScraperWithCredentials(cookies, authToken, username, password)
 
-		freshCookies, freshToken, refreshErr := nysegScraper.RefreshAuth(ctx)
-		if refreshErr != nil {
-			return fmt.Errorf("refreshing auth: %w (original error: %v)", refreshErr, err)
-		}
-
-		// Save refreshed credentials
-		switch service {
-		case "nyseg":
+		// If we have username/password but no cookies, do proactive login
+		if len(cookies) == 0 && username != "" && password != "" {
+			fmt.Println("No cookies found, performing initial login...")
+			freshCookies, freshToken, err := nysegScraper.RefreshAuth(ctx)
+			if err != nil {
+				return fmt.Errorf("initial login failed: %w", err)
+			}
 			cfg.Cookies.NYSEG = freshCookies
 			cfg.Cookies.NYSEGAuthToken = freshToken
-		case "coned":
-			cfg.Cookies.ConEd = freshCookies
-			cfg.Cookies.ConEdAuthToken = freshToken
+			if err := saveConfig(cfg); err != nil {
+				fmt.Printf("Warning: Could not save credentials: %v\n", err)
+			} else {
+				fmt.Println("✓ Login successful, credentials saved")
+			}
 		}
 
-		if saveErr := saveConfig(cfg); saveErr != nil {
-			fmt.Printf("Warning: Could not save refreshed credentials: %v\n", saveErr)
-		} else {
-			fmt.Println("✓ Credentials refreshed and saved")
-		}
-
-		// Create a fresh scraper with the new credentials
-		fmt.Println("Retrying fetch with fresh credentials...")
-		nysegScraper = scraper.NewNYSEGDirectScraperWithCredentials(freshCookies, freshToken, username, password)
+		// Scrape data with automatic auth refresh on failure
+		fmt.Printf("Fetching data from %s (last %d days)...\n", service, daysToFetch)
+		var err error
 		data, err = nysegScraper.Scrape(ctx, daysToFetch)
 
-		if err != nil {
-			return fmt.Errorf("scraping failed after auth refresh: %w", err)
+		// If scraping failed and we have credentials, try refreshing auth and retry
+		if err != nil && username != "" && password != "" {
+			fmt.Printf("⚠ Scraping failed: %v\n", err)
+			fmt.Printf("⚠ Attempting to refresh credentials and retry...\n")
+
+			freshCookies, freshToken, refreshErr := nysegScraper.RefreshAuth(ctx)
+			if refreshErr != nil {
+				return fmt.Errorf("refreshing auth: %w (original error: %v)", refreshErr, err)
+			}
+
+			cfg.Cookies.NYSEG = freshCookies
+			cfg.Cookies.NYSEGAuthToken = freshToken
+			if saveErr := saveConfig(cfg); saveErr != nil {
+				fmt.Printf("Warning: Could not save refreshed credentials: %v\n", saveErr)
+			} else {
+				fmt.Println("✓ Credentials refreshed and saved")
+			}
+
+			// Create a fresh scraper with the new credentials
+			fmt.Println("Retrying fetch with fresh credentials...")
+			nysegScraper = scraper.NewNYSEGDirectScraperWithCredentials(freshCookies, freshToken, username, password)
+			data, err = nysegScraper.Scrape(ctx, daysToFetch)
+
+			if err != nil {
+				return fmt.Errorf("scraping failed after auth refresh: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("scraping: %w (hint: add username/password to config.yaml for automatic login)", err)
 		}
-	} else if err != nil {
-		// No credentials to retry with
-		return fmt.Errorf("scraping: %w (hint: add username/password to config.yaml for automatic login)", err)
+	} else if service == "coned" {
+		// Con Edison scraper with auth token, customer UUID, and challenge answer
+		conedScraper := scraper.NewConEdScraperWithCredentials(cookies, authToken, customerUUID, username, password, challengeAnswer)
+		conedScraper.SetVisible(fetchVisible)
+
+		// If we have username/password but no cookies, do proactive login
+		if len(cookies) == 0 && username != "" && password != "" {
+			fmt.Println("No cookies found, performing initial login...")
+			freshCookies, freshToken, freshUUID, err := conedScraper.RefreshAuth(ctx)
+			if err != nil {
+				return fmt.Errorf("initial login failed: %w", err)
+			}
+			cfg.Cookies.ConEd = freshCookies
+			cfg.Cookies.ConEdAuthToken = freshToken
+			cfg.Cookies.ConEdCustomerUUID = freshUUID
+			if err := saveConfig(cfg); err != nil {
+				fmt.Printf("Warning: Could not save credentials: %v\n", err)
+			} else {
+				fmt.Println("✓ Login successful, credentials saved")
+			}
+		}
+
+		// Scrape data with automatic auth refresh on failure
+		fmt.Printf("Fetching data from %s (last %d days)...\n", service, daysToFetch)
+		var err error
+		data, err = conedScraper.Scrape(ctx, daysToFetch)
+
+		// If scraping failed, retry once with existing tokens (they should still be valid)
+		if err != nil {
+			fmt.Printf("⚠ Scraping failed: %v\n", err)
+			fmt.Printf("⚠ Retrying...\n")
+
+			data, err = conedScraper.Scrape(ctx, daysToFetch)
+
+			if err != nil {
+				return fmt.Errorf("scraping failed after retry: %w", err)
+			}
+		}
 	}
 
 	if len(data) == 0 {

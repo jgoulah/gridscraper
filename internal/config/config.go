@@ -10,21 +10,24 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Cookies        CookieConfig `yaml:"cookies"`
-	HomeAssistant  HAConfig     `yaml:"home_assistant,omitempty"`
-	DaysToFetch    int          `yaml:"days_to_fetch,omitempty"` // Number of days to fetch from API (default: 90)
+	Cookies              CookieConfig `yaml:"cookies"`
+	HomeAssistant        HAConfig     `yaml:"home_assistant,omitempty"`
+	ConEdHomeAssistant   HAConfig     `yaml:"coned_home_assistant,omitempty"`
+	DaysToFetch          int          `yaml:"days_to_fetch,omitempty"` // Number of days to fetch from API (default: 90)
 }
 
 // CookieConfig holds cookies and tokens for different services
 type CookieConfig struct {
-	NYSEG          []Cookie `yaml:"nyseg"`
-	NYSEGAuthToken string   `yaml:"nyseg_auth_token,omitempty"`
-	NYSEGUsername  string   `yaml:"nyseg_username,omitempty"`
-	NYSEGPassword  string   `yaml:"nyseg_password,omitempty"`
-	ConEd          []Cookie `yaml:"coned"`
-	ConEdAuthToken string   `yaml:"coned_auth_token,omitempty"`
-	ConEdUsername  string   `yaml:"coned_username,omitempty"`
-	ConEdPassword  string   `yaml:"coned_password,omitempty"`
+	NYSEG                []Cookie `yaml:"nyseg"`
+	NYSEGAuthToken       string   `yaml:"nyseg_auth_token,omitempty"`
+	NYSEGUsername        string   `yaml:"nyseg_username,omitempty"`
+	NYSEGPassword        string   `yaml:"nyseg_password,omitempty"`
+	ConEd                []Cookie `yaml:"coned"`
+	ConEdAuthToken       string   `yaml:"coned_auth_token,omitempty"`
+	ConEdCustomerUUID    string   `yaml:"coned_customer_uuid,omitempty"`
+	ConEdUsername        string   `yaml:"coned_username,omitempty"`
+	ConEdPassword        string   `yaml:"coned_password,omitempty"`
+	ConEdChallengeAnswer string   `yaml:"coned_challenge_answer,omitempty"`
 }
 
 // Cookie represents a browser cookie

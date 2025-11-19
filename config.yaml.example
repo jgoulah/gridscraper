@@ -16,10 +16,18 @@ cookies:
   coned_auth_token: ""
   coned_username: ""
   coned_password: ""
+  coned_challenge_answer: ""  # Answer to security challenge question
 
-# Home Assistant Configuration
+# Home Assistant Configuration (for NYSEG)
 home_assistant:
   enabled: true
   url: "http://yourdomain.local:5050"  # AppDaemon port
   token: "your-long-lived-access-token"
-  entity_id: "sensor.nyseg_energy_usage"
+  entity_id: "sensor.nyseg_energy_usage_direct"
+
+# Con Edison Home Assistant Configuration (separate instance)
+coned_home_assistant:
+  enabled: true
+  url: "http://yourdomain.local:5050"  # AppDaemon port
+  token: "your-long-lived-access-token"
+  entity_id: "sensor.coned_energy_usage_direct"

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jgoulah/gridscraper/internal/config"
 	"github.com/jgoulah/gridscraper/internal/publisher"
 	"github.com/jgoulah/gridscraper/pkg/models"
 	"github.com/spf13/cobra"
@@ -42,17 +43,6 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Check if Home Assistant is configured
-	if !cfg.HomeAssistant.Enabled {
-		return fmt.Errorf("Home Assistant is not enabled in config")
-	}
-
-	// Create publisher
-	pub, err := publisher.New(cfg.HomeAssistant)
-	if err != nil {
-		return fmt.Errorf("creating publisher: %w", err)
-	}
-
 	// Open database
 	db, err := openDB()
 	if err != nil {
@@ -89,6 +79,31 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	// Publish data for each service
 	totalPublished := 0
 	for _, service := range services {
+		// Select the appropriate Home Assistant config based on service
+		var haConfig config.HAConfig
+		switch service {
+		case "nyseg":
+			haConfig = cfg.HomeAssistant
+		case "coned":
+			haConfig = cfg.ConEdHomeAssistant
+		default:
+			fmt.Printf("Skipping unknown service: %s\n", service)
+			continue
+		}
+
+		// Check if HA is enabled for this service
+		if !haConfig.Enabled {
+			fmt.Printf("Home Assistant is not enabled for %s in config, skipping\n", service)
+			continue
+		}
+
+		// Create publisher for this service
+		pub, err := publisher.New(haConfig)
+		if err != nil {
+			fmt.Printf("Error creating publisher for %s: %v, skipping\n", service, err)
+			continue
+		}
+
 		// Get usage data based on --all flag
 		var data []models.UsageData
 		if publishAll {

@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jgoulah/gridscraper/internal/config"
 	"github.com/spf13/cobra"
 )
+
+var generateStatsService string
 
 var generateStatsCmd = &cobra.Command{
 	Use:   "generate-stats",
@@ -19,6 +22,7 @@ var generateStatsCmd = &cobra.Command{
 }
 
 func init() {
+	generateStatsCmd.Flags().StringVar(&generateStatsService, "service", "nyseg", "Service to generate stats for (nyseg or coned, default: nyseg)")
 	rootCmd.AddCommand(generateStatsCmd)
 }
 
@@ -31,17 +35,28 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Check if Home Assistant is configured
-	if !cfg.HomeAssistant.Enabled {
-		return fmt.Errorf("Home Assistant is not enabled in config")
+	// Select the appropriate Home Assistant config based on service
+	var haConfig config.HAConfig
+	switch generateStatsService {
+	case "nyseg":
+		haConfig = cfg.HomeAssistant
+	case "coned":
+		haConfig = cfg.ConEdHomeAssistant
+	default:
+		return fmt.Errorf("unknown service: %s (available: nyseg, coned)", generateStatsService)
+	}
+
+	// Check if Home Assistant is configured for this service
+	if !haConfig.Enabled {
+		return fmt.Errorf("Home Assistant is not enabled for %s in config", generateStatsService)
 	}
 
 	// Build API URL
-	apiURL := fmt.Sprintf("%s/api/appdaemon/generate_statistics", cfg.HomeAssistant.URL)
+	apiURL := fmt.Sprintf("%s/api/appdaemon/generate_statistics", haConfig.URL)
 
 	// Create payload
 	payload := map[string]string{
-		"entity_id": cfg.HomeAssistant.EntityID,
+		"entity_id": haConfig.EntityID,
 	}
 
 	body, err := json.Marshal(payload)
@@ -56,10 +71,10 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+cfg.HomeAssistant.Token)
+	req.Header.Set("Authorization", "Bearer "+haConfig.Token)
 	req.Header.Set("Content-Type", "application/json")
 
-	fmt.Printf("Generating statistics for %s...\n", cfg.HomeAssistant.EntityID)
+	fmt.Printf("Generating statistics for %s (%s)...\n", haConfig.EntityID, generateStatsService)
 
 	// Send request
 	resp, err := client.Do(req)
