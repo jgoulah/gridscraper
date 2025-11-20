@@ -352,60 +352,18 @@ Override with: `--db /path/to/data.db`
 
 ### Config File Format
 
-```yaml
-# Number of days of historical data to fetch (default: 90)
-days_to_fetch: 90  # Global default for all services
+See [`config.yaml.example`](config.yaml.example) for a complete configuration template with detailed comments explaining each field.
 
-# Service-specific overrides (optional - falls back to days_to_fetch if not set)
-nyseg_days_to_fetch: 90    # NYSEG-specific days to fetch
-coned_days_to_fetch: 365   # ConEd-specific days to fetch
+Key configuration sections:
+- **Fetch Settings**: Control how many days of historical data to fetch (global and per-service)
+- **Authentication**: NYSEG and Con Edison credentials (username/password)
+- **Home Assistant Integration**: Separate configurations for NYSEG and Con Edison (can use different HA instances)
 
-cookies:
-  # NYSEG credentials (automatic authentication - recommended)
-  nyseg_username: your-username
-  nyseg_password: your-password
-  nyseg: []  # Optional manual cookies (captured via 'login' command)
-  nyseg_auth_token: ""  # Automatically populated
-
-  # Con Edison credentials
-  coned_username: your-username
-  coned_password: your-password
-  coned_challenge_answer: "Your security question answer"
-  coned: []  # Optional manual cookies
-  coned_auth_token: ""  # Automatically populated
-  coned_customer_uuid: ""  # Automatically populated
-
-# Home Assistant Configuration (for NYSEG)
-home_assistant:
-  enabled: true
-  url: "http://yourdomain.local:5050"  # AppDaemon port, not HA port (8123)
-  token: "your-long-lived-access-token"
-  entity_id: "sensor.nyseg_energy_usage_direct"
-
-# Con Edison Home Assistant Configuration (separate instance)
-coned_home_assistant:
-  enabled: true
-  url: "http://yourdomain.local:5050"  # AppDaemon port
-  token: "your-long-lived-access-token"
-  entity_id: "sensor.coned_energy_usage_direct"
+To get started:
+```bash
+cp config.yaml.example config.yaml
+# Edit config.yaml with your credentials and settings
 ```
-
-**Configuration Options:**
-- `days_to_fetch`: Global default for number of days to fetch (default: 90)
-- `nyseg_days_to_fetch`: NYSEG-specific override (optional, falls back to `days_to_fetch`)
-- `coned_days_to_fetch`: ConEd-specific override (optional, falls back to `days_to_fetch`)
-
-**Authentication:**
-- `nyseg_username` / `nyseg_password`: NYSEG credentials for automatic login (recommended)
-- `coned_username` / `coned_password` / `coned_challenge_answer`: Con Edison credentials
-- Tokens and UUIDs are automatically populated and refreshed by the application
-
-**Home Assistant Configuration:**
-- `enabled`: Set to `true` to enable Home Assistant publishing
-- `url`: AppDaemon URL with port 5050 (not the Home Assistant port 8123)
-- `token`: Long-lived access token from Home Assistant (Settings → Profile → Long-Lived Access Tokens)
-- `entity_id`: The sensor entity ID to populate with historical data
-- Separate configurations allow publishing to different Home Assistant instances
 
 ## Project Structure
 
