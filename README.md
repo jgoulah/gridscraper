@@ -35,12 +35,18 @@ See the Makefile for additional targets (`make help`).
 
 ### 1. Configure Authentication
 
-Add your NYSEG credentials to `config.yaml`:
+Add your credentials to `config.yaml`:
 
 ```yaml
 cookies:
+  # NYSEG credentials
   nyseg_username: your-username
   nyseg_password: your-password
+
+  # Con Edison credentials
+  coned_username: your-username
+  coned_password: your-password
+  coned_challenge_answer: "Answer to your security question"
 ```
 
 The application will automatically log in and refresh authentication as needed when fetching data.
@@ -59,8 +65,6 @@ gridscraper login coned
 
 This will open a browser window, wait for you to log in, then extract and save the cookies to `config.yaml`.
 
-**Con Edison Note**: For automatic login, you'll also need to configure the security challenge answer in `config.yaml`.
-
 ### 2. Fetch Usage Data
 
 Fetch your hourly usage data:
@@ -78,7 +82,7 @@ This will:
 - Download hourly usage data (NYSEG: API calls, Con Edison: CSV export via browser automation)
 - Store hourly readings (24 per day) in `./data.db`
 - Skip any timestamps that already exist (duplicate prevention)
-- Fetch the last 90 days by default (configurable via `days_to_fetch` in config)
+- Fetch the last 90 days by default (configurable via `days_to_fetch`, `nyseg_days_to_fetch`, or `coned_days_to_fetch` in config)
 - For Con Edison: Downloads 15-minute intervals and aggregates to hourly data
 
 ### 3. View Stored Data
@@ -169,6 +173,47 @@ Backfill State API endpoints registered:
   - /api/appdaemon/generate_statistics
 ```
 
+#### 4.6. Create Template Sensors
+
+Add template sensors to your Home Assistant `configuration.yaml`:
+
+```yaml
+template:
+  - sensor:
+      # NYSEG sensor
+      - name: "NYSEG Energy Usage Direct"
+        unique_id: "nyseg_energy_usage_direct"
+        unit_of_measurement: 'kWh'
+        device_class: energy
+        state_class: total_increasing
+        state: "{{ float(0) }}"
+
+      # Con Edison sensor
+      - name: "ConEd Energy Usage Direct"
+        unique_id: "coned_energy_usage_direct"
+        unit_of_measurement: 'kWh'
+        device_class: energy
+        state_class: total_increasing
+        state: "{{ float(0) }}"
+```
+
+**Important Notes:**
+- The `entity_id` is generated from the `name` field (e.g., "ConEd Energy Usage Direct" becomes `sensor.coned_energy_usage_direct`)
+- The `entity_id` must match the `entity_id` in your `config.yaml`
+- The `state` field is just a placeholder; historical data is backfilled directly to the database
+- `state_class: total_increasing` is required for the Energy dashboard
+
+After adding, restart Home Assistant or reload template entities (Developer Tools → YAML → Template Entities).
+
+#### 4.7. Add Sensors to Energy Dashboard
+
+1. Go to Settings → Dashboards → Energy
+2. Click "Add Consumption"
+3. Select your sensor (e.g., `sensor.nyseg_energy_usage_direct` or `sensor.coned_energy_usage_direct`)
+4. Save
+
+This creates the necessary `statistics_meta` entry for the generate-stats command to work.
+
 ### 5. Publish to Home Assistant
 
 After fetching data, publish it to Home Assistant:
@@ -207,8 +252,11 @@ The publish command:
 After publishing data to Home Assistant, you need to generate statistics for the Energy dashboard:
 
 ```bash
-# Generate statistics from published states
-gridscraper generate-stats
+# Generate statistics for NYSEG (default)
+gridscraper generate-stats --service nyseg
+
+# Generate statistics for Con Edison
+gridscraper generate-stats --service coned
 ```
 
 This command:
@@ -230,8 +278,7 @@ sudo make install
 
 This installs:
 - `/usr/local/bin/gridscraper` - the main binary
-- `/usr/local/bin/gridscraper-sync.sh` - NYSEG automated sync script
-- `/usr/local/bin/gridscraper-sync-coned.sh` - Con Edison automated sync script
+- `/usr/local/bin/gridscraper-sync.sh` - automated sync script (supports nyseg, coned, or both)
 
 #### 7.2. Setup Configuration Files
 
@@ -246,7 +293,12 @@ sudo cp data.db /usr/local/etc/gridscraper/data.db
 **Important**: Update `days_to_fetch` in your production `config.yaml`:
 
 ```yaml
-days_to_fetch: 15  # Fetch last 15 days (with buffer for data lag and missed runs)
+# Global default (fallback: 90)
+days_to_fetch: 90
+
+# Service-specific overrides (optional)
+nyseg_days_to_fetch: 15    # Fetch last 15 days for NYSEG
+coned_days_to_fetch: 365   # Fetch last year for Con Edison
 ```
 
 #### 7.3. Schedule with Cron
@@ -257,15 +309,16 @@ Add to your crontab:
 # Edit crontab
 crontab -e
 
-# Add for NYSEG (runs daily at 6 AM)
-0 6 * * * /usr/local/bin/gridscraper-sync.sh >> /usr/local/etc/gridscraper/nyseg.log 2>&1
+# Option 1: Sync all services (runs daily at 6 AM)
+0 6 * * * /usr/local/bin/gridscraper-sync.sh >> /usr/local/etc/gridscraper/sync.log 2>&1
 
-# Add for Con Edison (runs daily at 6 AM)
-0 6 * * * /usr/local/bin/gridscraper-sync-coned.sh >> /usr/local/etc/gridscraper/coned.log 2>&1
+# Option 2: Sync specific services at different times
+0 6 * * * /usr/local/bin/gridscraper-sync.sh nyseg >> /usr/local/etc/gridscraper/nyseg.log 2>&1
+0 7 * * * /usr/local/bin/gridscraper-sync.sh coned >> /usr/local/etc/gridscraper/coned.log 2>&1
 ```
 
-Each sync script automatically:
-1. Fetches new data from the utility
+The sync script automatically:
+1. Fetches new data from the specified utility (or all utilities if no argument)
 2. Publishes new records to the appropriate Home Assistant instance
 3. Generates statistics for the Energy dashboard
 
@@ -300,47 +353,59 @@ Override with: `--db /path/to/data.db`
 ### Config File Format
 
 ```yaml
-# Number of days of historical data to fetch from API (default: 90)
-days_to_fetch: 90
+# Number of days of historical data to fetch (default: 90)
+days_to_fetch: 90  # Global default for all services
+
+# Service-specific overrides (optional - falls back to days_to_fetch if not set)
+nyseg_days_to_fetch: 90    # NYSEG-specific days to fetch
+coned_days_to_fetch: 365   # ConEd-specific days to fetch
 
 cookies:
-  # Automatic authentication (recommended)
+  # NYSEG credentials (automatic authentication - recommended)
   nyseg_username: your-username
   nyseg_password: your-password
+  nyseg: []  # Optional manual cookies (captured via 'login' command)
+  nyseg_auth_token: ""  # Automatically populated
 
-  # Or manual cookie-based auth (optional)
-  nyseg:
-    - name: session_id
-      value: abc123...
-      domain: energymanager.nyseg.com
-      path: /
-      httpOnly: true
-      secure: true
-
+  # Con Edison credentials
   coned_username: your-username
   coned_password: your-password
-  coned: []
+  coned_challenge_answer: "Your security question answer"
+  coned: []  # Optional manual cookies
+  coned_auth_token: ""  # Automatically populated
+  coned_customer_uuid: ""  # Automatically populated
 
-# Home Assistant configuration
+# Home Assistant Configuration (for NYSEG)
 home_assistant:
   enabled: true
   url: "http://yourdomain.local:5050"  # AppDaemon port, not HA port (8123)
   token: "your-long-lived-access-token"
-  entity_id: "sensor.nyseg_energy_usage_direct"  # The sensor entity to populate
+  entity_id: "sensor.nyseg_energy_usage_direct"
+
+# Con Edison Home Assistant Configuration (separate instance)
+coned_home_assistant:
+  enabled: true
+  url: "http://yourdomain.local:5050"  # AppDaemon port
+  token: "your-long-lived-access-token"
+  entity_id: "sensor.coned_energy_usage_direct"
 ```
 
 **Configuration Options:**
-- `days_to_fetch`: Number of days of historical data to fetch from the API (default: 90 days / 3 months)
+- `days_to_fetch`: Global default for number of days to fetch (default: 90)
+- `nyseg_days_to_fetch`: NYSEG-specific override (optional, falls back to `days_to_fetch`)
+- `coned_days_to_fetch`: ConEd-specific override (optional, falls back to `days_to_fetch`)
 
 **Authentication:**
-- `nyseg_username` / `nyseg_password`: Credentials for automatic login (recommended)
-- `nyseg` cookies: Alternative cookie-based authentication (captured via `login` command)
+- `nyseg_username` / `nyseg_password`: NYSEG credentials for automatic login (recommended)
+- `coned_username` / `coned_password` / `coned_challenge_answer`: Con Edison credentials
+- Tokens and UUIDs are automatically populated and refreshed by the application
 
 **Home Assistant Configuration:**
 - `enabled`: Set to `true` to enable Home Assistant publishing
 - `url`: AppDaemon URL with port 5050 (not the Home Assistant port 8123)
 - `token`: Long-lived access token from Home Assistant (Settings → Profile → Long-Lived Access Tokens)
 - `entity_id`: The sensor entity ID to populate with historical data
+- Separate configurations allow publishing to different Home Assistant instances
 
 ## Project Structure
 
