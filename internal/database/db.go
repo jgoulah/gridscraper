@@ -123,14 +123,14 @@ func (db *DB) GetUsage(date time.Time, service string) (*models.UsageData, error
 	}
 
 	if startTimeStr.Valid && startTimeStr.String != "" {
-		data.StartTime, err = time.Parse("2006-01-02 15:04:05", startTimeStr.String)
+		data.StartTime, err = time.ParseInLocation("2006-01-02 15:04:05", startTimeStr.String, time.Local)
 		if err != nil {
 			return nil, fmt.Errorf("parsing start_time: %w", err)
 		}
 	}
 
 	if endTimeStr.Valid && endTimeStr.String != "" {
-		data.EndTime, err = time.Parse("2006-01-02 15:04:05", endTimeStr.String)
+		data.EndTime, err = time.ParseInLocation("2006-01-02 15:04:05", endTimeStr.String, time.Local)
 		if err != nil {
 			return nil, fmt.Errorf("parsing end_time: %w", err)
 		}
@@ -170,14 +170,14 @@ func (db *DB) ListUsage(service string) ([]models.UsageData, error) {
 		}
 
 		if startTimeStr.Valid && startTimeStr.String != "" {
-			data.StartTime, err = time.Parse("2006-01-02 15:04:05", startTimeStr.String)
+			data.StartTime, err = time.ParseInLocation("2006-01-02 15:04:05", startTimeStr.String, time.Local)
 			if err != nil {
 				return nil, fmt.Errorf("parsing start_time: %w", err)
 			}
 		}
 
 		if endTimeStr.Valid && endTimeStr.String != "" {
-			data.EndTime, err = time.Parse("2006-01-02 15:04:05", endTimeStr.String)
+			data.EndTime, err = time.ParseInLocation("2006-01-02 15:04:05", endTimeStr.String, time.Local)
 			if err != nil {
 				return nil, fmt.Errorf("parsing end_time: %w", err)
 			}
@@ -229,14 +229,14 @@ func (db *DB) ListUnpublishedUsage(service string) ([]models.UsageData, error) {
 		}
 
 		if startTimeStr.Valid && startTimeStr.String != "" {
-			data.StartTime, err = time.Parse("2006-01-02 15:04:05", startTimeStr.String)
+			data.StartTime, err = time.ParseInLocation("2006-01-02 15:04:05", startTimeStr.String, time.Local)
 			if err != nil {
 				return nil, fmt.Errorf("parsing start_time: %w", err)
 			}
 		}
 
 		if endTimeStr.Valid && endTimeStr.String != "" {
-			data.EndTime, err = time.Parse("2006-01-02 15:04:05", endTimeStr.String)
+			data.EndTime, err = time.ParseInLocation("2006-01-02 15:04:05", endTimeStr.String, time.Local)
 			if err != nil {
 				return nil, fmt.Errorf("parsing end_time: %w", err)
 			}
