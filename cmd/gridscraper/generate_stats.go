@@ -108,5 +108,60 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  - Total hours: %d\n", int(totalHours))
 	}
 
+	// Generate cost statistics
+	fmt.Printf("\nGenerating cost statistics for %s...\n", haConfig.EntityID)
+
+	costEntityID := haConfig.EntityID + "_cost"
+	costAPIURL := fmt.Sprintf("%s/api/appdaemon/generate_cost_statistics", haConfig.URL)
+
+	costPayload := map[string]string{
+		"energy_entity_id": haConfig.EntityID,
+		"cost_entity_id":   costEntityID,
+	}
+
+	costBody, err := json.Marshal(costPayload)
+	if err != nil {
+		return fmt.Errorf("encoding cost payload: %w", err)
+	}
+
+	costReq, err := http.NewRequest("POST", costAPIURL, bytes.NewBuffer(costBody))
+	if err != nil {
+		return fmt.Errorf("creating cost request: %w", err)
+	}
+
+	costReq.Header.Set("Authorization", "Bearer "+haConfig.Token)
+	costReq.Header.Set("Content-Type", "application/json")
+
+	costResp, err := client.Do(costReq)
+	if err != nil {
+		return fmt.Errorf("cost request error: %w", err)
+	}
+	defer costResp.Body.Close()
+
+	costRespBody, _ := io.ReadAll(costResp.Body)
+
+	if costResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("cost HTTP error: status %d, response: %s", costResp.StatusCode, string(costRespBody))
+	}
+
+	var costResult map[string]interface{}
+	if err := json.Unmarshal(costRespBody, &costResult); err != nil {
+		return fmt.Errorf("parsing cost response: %w", err)
+	}
+
+	fmt.Printf("✓ Cost statistics generated successfully\n")
+	if inserted, ok := costResult["inserted"].(float64); ok {
+		fmt.Printf("  - Inserted: %d new cost records\n", int(inserted))
+	}
+	if updated, ok := costResult["updated"].(float64); ok {
+		fmt.Printf("  - Updated: %d existing cost records\n", int(updated))
+	}
+	if totalCost, ok := costResult["total_cost"].(float64); ok {
+		fmt.Printf("  - Total cost: $%.2f\n", totalCost)
+	}
+	if rateUsed, ok := costResult["rate_used"].(float64); ok {
+		fmt.Printf("  - Rate used: $%.5f/kWh\n", rateUsed)
+	}
+
 	return nil
 }
