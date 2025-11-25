@@ -4,8 +4,9 @@ BINARY_NAME=gridscraper
 INSTALL_PATH=/usr/local/bin
 CONFIG_PATH=/usr/local/etc/gridscraper
 SYNC_SCRIPT=gridscraper-sync.sh
-REMOTE_HOST=mediaserver
 REMOTE_BIN_PATH=/opt/gridscraper
+# your remote install host (only necessary for install-remote)
+REMOTE_HOST=mediaserver
 
 help:
 	@echo "GridScraper Makefile"
@@ -58,7 +59,7 @@ install-remote: build-remote
 	ssh $(REMOTE_HOST) "chmod 755 $(REMOTE_BIN_PATH)/$(BINARY_NAME) $(REMOTE_BIN_PATH)/$(SYNC_SCRIPT)"
 	@echo "✓ Installed $(REMOTE_HOST):$(REMOTE_BIN_PATH)/$(BINARY_NAME)"
 	@echo "✓ Installed $(REMOTE_HOST):$(REMOTE_BIN_PATH)/$(SYNC_SCRIPT)"
-# Next steps on mediaserver:
+# Next steps on the remote host:
 #   1. Create config.yaml in /usr/local/etc/gridscraper/ (if not already there)
 #   2. Create data.db in /usr/local/etc/gridscraper/ (if not already there)
 #   3. Add to crontab: 0 6 * * * /opt/gridscraper/gridscraper-sync.sh >> /usr/local/etc/gridscraper/sync.log 2>&1
