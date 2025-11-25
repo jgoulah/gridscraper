@@ -16,7 +16,9 @@ declare -A RESULTS
 # Function to sync a single service
 sync_service() {
     local service=$1
-    echo "--- Syncing $service ---"
+    echo "-----------------------------------------"
+    echo "------------- Syncing $service -------------"
+    echo "-----------------------------------------"
 
     # Step 1: Fetch data
     echo "Step 1: Fetching data from $service..."

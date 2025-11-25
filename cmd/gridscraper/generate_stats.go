@@ -12,7 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var generateStatsService string
+var (
+	generateStatsService string
+	generateStatsRate    string
+)
 
 var generateStatsCmd = &cobra.Command{
 	Use:   "generate-stats",
@@ -23,6 +26,7 @@ var generateStatsCmd = &cobra.Command{
 
 func init() {
 	generateStatsCmd.Flags().StringVar(&generateStatsService, "service", "nyseg", "Service to generate stats for (nyseg or coned, default: nyseg)")
+	generateStatsCmd.Flags().StringVar(&generateStatsRate, "rate", "", "Optional cost per kWh rate for cost statistics (e.g., 0.20102749)")
 	rootCmd.AddCommand(generateStatsCmd)
 }
 
@@ -50,6 +54,9 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 	if !haConfig.Enabled {
 		return fmt.Errorf("Home Assistant is not enabled for %s in config", generateStatsService)
 	}
+
+	// Show which HA instance we're working with
+	fmt.Printf("Generating statistics for %s at Home Assistant: %s (entity: %s)\n", generateStatsService, haConfig.URL, haConfig.EntityID)
 
 	// Build API URL
 	apiURL := fmt.Sprintf("%s/api/appdaemon/generate_statistics", haConfig.URL)
@@ -117,6 +124,12 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 	costPayload := map[string]string{
 		"energy_entity_id": haConfig.EntityID,
 		"cost_entity_id":   costEntityID,
+	}
+
+	// Add rate if provided
+	if generateStatsRate != "" {
+		costPayload["rate"] = generateStatsRate
+		fmt.Printf("Using provided rate: %s per kWh\n", generateStatsRate)
 	}
 
 	costBody, err := json.Marshal(costPayload)

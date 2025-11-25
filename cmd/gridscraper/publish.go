@@ -97,6 +97,9 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Show which HA instance we're publishing to
+		fmt.Printf("Publishing %s to Home Assistant at %s (entity: %s)\n", service, haConfig.URL, haConfig.EntityID)
+
 		// Create publisher for this service
 		pub, err := publisher.New(haConfig)
 		if err != nil {
