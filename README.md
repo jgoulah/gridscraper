@@ -11,7 +11,7 @@ A Go-based CLI tool to scrape electrical usage data from utility websites (NYSEG
 - **SQLite storage**: Local database for tracking usage over time
 - **Home Assistant integration**: Publishes historical hourly data via AppDaemon
 - **Smart publishing**: Tracks published records to avoid re-uploading
-- **Statistics generation**: Automatic compilation for Home Assistant Energy dashboard
+- **Statistics generation**: Automatic compilation of energy and cost statistics for Home Assistant Energy dashboard
 - **Automated sync**: Daily cron script for fetch → publish → statistics workflow
 - **Debug mode**: Inspect pages to troubleshoot scraping issues
 
@@ -138,9 +138,10 @@ It will typically be something like `/addon_configs/a0d7b954_appdaemon/` (where 
 
 Copy the template script from `scripts/appdaemon/backfill_state.py` in this repository to `/addon_configs/{addon_slug}_appdaemon/apps/backfill_state.py` on your Home Assistant host.
 
-This script provides two HTTP endpoints:
+This script provides three HTTP endpoints:
 - `/api/appdaemon/backfill_state` - Stores individual hourly consumption values
-- `/api/appdaemon/generate_statistics` - Generates statistics for the Energy dashboard
+- `/api/appdaemon/generate_statistics` - Generates energy statistics for the Energy dashboard
+- `/api/appdaemon/generate_cost_statistics` - Generates cost statistics for the Energy dashboard
 
 #### 4.3. Configure the AppDaemon App
 
@@ -152,28 +153,17 @@ backfill_state:
   class: BackfillState
 ```
 
-#### 4.4. Enable Home Assistant Recorder
-
-Ensure the recorder is enabled in your Home Assistant `configuration.yaml`:
-
-```yaml
-recorder:
-  db_url: sqlite:////config/home-assistant_v2.db
-  purge_keep_days: 365  # Keep 1 year of history (adjust as needed)
-```
-
-Restart Home Assistant after adding this configuration.
-
-#### 4.5. Restart AppDaemon
+#### 4.4. Restart AppDaemon
 
 Restart the AppDaemon add-on to load the new script. Check the logs to verify you see:
 ```
 Backfill State API endpoints registered:
   - /api/appdaemon/backfill_state
   - /api/appdaemon/generate_statistics
+  - /api/appdaemon/generate_cost_statistics
 ```
 
-#### 4.6. Create Template Sensors
+#### 4.5. Create Template Sensors
 
 Add template sensors to your Home Assistant `configuration.yaml`:
 
@@ -205,7 +195,7 @@ template:
 
 After adding, restart Home Assistant or reload template entities (Developer Tools → YAML → Template Entities).
 
-#### 4.7. Add Sensors to Energy Dashboard
+#### 4.6. Add Sensors to Energy Dashboard
 
 1. Go to Settings → Dashboards → Energy
 2. Click "Add Consumption"
@@ -257,13 +247,19 @@ gridscraper generate-stats --service nyseg
 
 # Generate statistics for Con Edison
 gridscraper generate-stats --service coned
+
+# Generate with manual cost rate (useful for new cost sensors)
+gridscraper generate-stats --service nyseg --rate 0.20102749
 ```
 
 This command:
-- Calls the AppDaemon `generate_statistics` endpoint
-- Compiles hourly statistics from individual consumption values
+- Calls the AppDaemon `generate_statistics` and `generate_cost_statistics` endpoints
+- Compiles hourly energy and cost statistics from individual consumption values
+- Auto-calculates cost rate from existing data, or uses manual `--rate` if provided
 - Populates the Home Assistant statistics tables for the Energy dashboard
 - Reads entity_id and AppDaemon URL from your `config.yaml`
+
+**Note**: For new cost sensors, use the `--rate` flag to specify your cost per kWh. After the first backfill, future runs can auto-calculate the rate from existing statistics.
 
 ### 7. Automated Daily Sync
 
