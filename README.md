@@ -480,7 +480,7 @@ gridscraper login nyseg
 
 ## License
 
-MIT
+BSD 3-Clause License
 
 ## Contributing
 
