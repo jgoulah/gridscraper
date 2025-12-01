@@ -53,7 +53,10 @@ sync_service() {
     return 0
 }
 
+echo "=================================================================================="
 echo "=== GridScraper Sync started at $(date) ==="
+echo "=================================================================================="
+echo ""
 
 case "$SERVICE" in
     nyseg)
@@ -73,6 +76,7 @@ case "$SERVICE" in
         ;;
 esac
 
+echo ""
 echo "=== GridScraper Sync completed at $(date) ==="
 echo ""
 echo "Summary:"
@@ -83,3 +87,7 @@ for service in "${!RESULTS[@]}"; do
         echo "  ✗ $service: failed"
     fi
 done
+echo "=================================================================================="
+echo "=================================================================================="
+echo ""
+echo ""
