@@ -141,7 +141,20 @@ class BackfillState(hass.Hass):
             # Calculate cumulative sum for statistics
             inserted = 0
             updated = 0
-            cumulative_sum = 0.0
+
+            # Get the starting cumulative sum from the last statistic before our earliest timestamp
+            earliest_ts = min(hourly_data.keys())
+            cursor.execute("""
+                SELECT sum FROM statistics
+                WHERE metadata_id = ? AND start_ts < ?
+                ORDER BY start_ts DESC
+                LIMIT 1
+            """, (stats_metadata_id, earliest_ts))
+
+            prior_sum_row = cursor.fetchone()
+            cumulative_sum = prior_sum_row[0] if prior_sum_row else 0.0
+
+            self.log(f"Starting cumulative sum from {cumulative_sum} (timestamp before {earliest_ts})")
 
             for hour_ts in sorted(hourly_data.keys()):
                 # Sum all consumption values for this hour
@@ -267,7 +280,23 @@ class BackfillState(hass.Hass):
             # Calculate cumulative cost
             inserted = 0
             updated = 0
-            cumulative_cost = 0.0
+
+            # Get the starting cumulative cost from the last statistic before our earliest timestamp
+            if energy_stats:
+                earliest_ts = energy_stats[0][0]
+                cursor.execute("""
+                    SELECT sum FROM statistics
+                    WHERE metadata_id = ? AND start_ts < ?
+                    ORDER BY start_ts DESC
+                    LIMIT 1
+                """, (cost_stats_id, earliest_ts))
+
+                prior_cost_row = cursor.fetchone()
+                cumulative_cost = prior_cost_row[0] if prior_cost_row else 0.0
+
+                self.log(f"Starting cumulative cost from {cumulative_cost} (timestamp before {earliest_ts})")
+            else:
+                cumulative_cost = 0.0
 
             for start_ts, energy_kwh in energy_stats:
                 if energy_kwh is None:
