@@ -149,11 +149,14 @@ func runCapture(cmd *cobra.Command, args []string) error {
 					req["hasPostData"] = true
 				}
 
-				// Extract Up-Authorization token if present
-				if authToken, ok := ev.Request.Headers["Up-Authorization"]; ok {
-					if authStr, ok := authToken.(string); ok && authStr != "" {
-						capturedAuthToken = authStr
-						fmt.Printf("   🔑 Captured auth token\n")
+				// Extract auth token if present (check both header names)
+				for _, headerName := range []string{"Up-Authorization", "X-Authentication"} {
+					if authToken, ok := ev.Request.Headers[headerName]; ok {
+						if authStr, ok := authToken.(string); ok && authStr != "" {
+							capturedAuthToken = authStr
+							fmt.Printf("   🔑 Captured auth token (%s)\n", headerName)
+							break
+						}
 					}
 				}
 

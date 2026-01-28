@@ -16,6 +16,8 @@ type Config struct {
 	DaysToFetch          int          `yaml:"days_to_fetch,omitempty"`         // Global default (fallback: 90)
 	NYSEGDaysToFetch     int          `yaml:"nyseg_days_to_fetch,omitempty"`   // NYSEG-specific override
 	ConEdDaysToFetch     int          `yaml:"coned_days_to_fetch,omitempty"`   // ConEd-specific override
+	NYSEGRate            float64      `yaml:"nyseg_rate,omitempty"`            // Cost per kWh for NYSEG
+	ConEdRate            float64      `yaml:"coned_rate,omitempty"`            // Cost per kWh for ConEd
 }
 
 // CookieConfig holds cookies and tokens for different services
@@ -118,4 +120,26 @@ func (c *Config) GetConEdDaysToFetch() int {
 		return c.ConEdDaysToFetch
 	}
 	return c.GetDaysToFetch()
+}
+
+// GetNYSEGRate returns the NYSEG cost per kWh rate, or 0 if not set
+func (c *Config) GetNYSEGRate() float64 {
+	return c.NYSEGRate
+}
+
+// GetConEdRate returns the ConEd cost per kWh rate, or 0 if not set
+func (c *Config) GetConEdRate() float64 {
+	return c.ConEdRate
+}
+
+// GetRate returns the rate for the specified service, or 0 if not set
+func (c *Config) GetRate(service string) float64 {
+	switch service {
+	case "nyseg":
+		return c.GetNYSEGRate()
+	case "coned":
+		return c.GetConEdRate()
+	default:
+		return 0
+	}
 }

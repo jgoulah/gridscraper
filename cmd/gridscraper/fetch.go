@@ -90,6 +90,7 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	if service == "nyseg" {
 		// NYSEG scraper with auth token
 		nysegScraper := scraper.NewNYSEGDirectScraperWithCredentials(cookies, authToken, username, password)
+		nysegScraper.SetVisible(fetchVisible)
 
 		// If we have username/password but no cookies, do proactive login
 		if len(cookies) == 0 && username != "" && password != "" {

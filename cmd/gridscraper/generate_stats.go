@@ -126,10 +126,13 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 		"cost_entity_id":   costEntityID,
 	}
 
-	// Add rate if provided
+	// Add rate if provided via flag or config
 	if generateStatsRate != "" {
 		costPayload["rate"] = generateStatsRate
 		fmt.Printf("Using provided rate: %s per kWh\n", generateStatsRate)
+	} else if configRate := cfg.GetRate(generateStatsService); configRate > 0 {
+		costPayload["rate"] = fmt.Sprintf("%f", configRate)
+		fmt.Printf("Using config rate: $%.6f per kWh\n", configRate)
 	}
 
 	costBody, err := json.Marshal(costPayload)

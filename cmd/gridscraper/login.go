@@ -68,11 +68,15 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		case *network.EventRequestWillBeSent:
 			// Capture auth token from any request (only report once)
 			if !tokenCaptured {
-				if authToken, ok := ev.Request.Headers["Up-Authorization"]; ok {
-					if authStr, ok := authToken.(string); ok && authStr != "" {
-						capturedAuthToken = authStr
-						tokenCaptured = true
-						fmt.Printf("✓ Captured auth token from network request\n")
+				// Check both possible header names
+				for _, headerName := range []string{"Up-Authorization", "X-Authentication"} {
+					if authToken, ok := ev.Request.Headers[headerName]; ok {
+						if authStr, ok := authToken.(string); ok && authStr != "" {
+							capturedAuthToken = authStr
+							tokenCaptured = true
+							fmt.Printf("✓ Captured auth token from network request (%s)\n", headerName)
+							break
+						}
 					}
 				}
 			}

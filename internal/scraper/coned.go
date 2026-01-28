@@ -111,6 +111,9 @@ func (s *ConEdScraper) authenticate(ctx context.Context) error {
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", !s.visible),
+		chromedp.Flag("no-sandbox", true),              // Required for running as root on Linux
+		chromedp.Flag("disable-gpu", true),             // Recommended for headless Linux
+		chromedp.Flag("disable-dev-shm-usage", true),   // Avoid /dev/shm issues on Linux
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 	)
 
@@ -528,6 +531,9 @@ func (s *ConEdScraper) RefreshAuth(ctx context.Context) ([]config.Cookie, string
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", !s.visible),
+		chromedp.Flag("no-sandbox", true),              // Required for running as root on Linux
+		chromedp.Flag("disable-gpu", true),             // Recommended for headless Linux
+		chromedp.Flag("disable-dev-shm-usage", true),   // Avoid /dev/shm issues on Linux
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 	)
 

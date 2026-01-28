@@ -15,6 +15,15 @@ nyseg_days_to_fetch: 90    # NYSEG-specific days to fetch
 coned_days_to_fetch: 15    # ConEd-specific days to fetch
 
 # ============================================================================
+# COST CALCULATION RATES
+# ============================================================================
+# Cost per kWh for each service (used for cost statistics generation)
+# These rates are used by 'generate-stats' when --rate flag is not provided
+# You can find your rate on your utility bill or account portal
+nyseg_rate: 0.20102749     # NYSEG cost per kWh (e.g., $0.20102749)
+coned_rate: 0.15000000     # ConEd cost per kWh (e.g., $0.15000000)
+
+# ============================================================================
 # AUTHENTICATION
 # ============================================================================
 cookies:

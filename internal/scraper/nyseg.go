@@ -45,6 +45,9 @@ func (s *NYSEGScraper) Scrape(ctx context.Context, daysToFetch int) ([]models.Us
 	// Create browser context with download directory
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", !s.visible),
+		chromedp.Flag("no-sandbox", true),              // Required for running as root on Linux
+		chromedp.Flag("disable-gpu", true),             // Recommended for headless Linux
+		chromedp.Flag("disable-dev-shm-usage", true),   // Avoid /dev/shm issues on Linux
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
