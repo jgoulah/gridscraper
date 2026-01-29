@@ -24,6 +24,7 @@ vendor/
 # IDE files
 .vscode/
 .idea/
+.serena/
 *.swp
 *.swo
 *~

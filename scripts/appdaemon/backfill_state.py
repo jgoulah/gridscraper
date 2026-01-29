@@ -88,6 +88,7 @@ class BackfillState(hass.Hass):
     def generate_statistics(self, data, **kwargs):
         """Generate statistics from individual hourly consumption values"""
         entity_id = data.get("entity_id")
+        clear_existing = data.get("clear_existing", False)
 
         if not entity_id:
             return {"error": "entity_id required"}, 400
@@ -112,7 +113,14 @@ class BackfillState(hass.Hass):
                 return {"error": "No states found"}, 404
             states_metadata_id = row[0]
 
+            # Optionally clear existing statistics to ensure clean regeneration
+            if clear_existing:
+                cursor.execute("DELETE FROM statistics WHERE metadata_id = ?", (stats_metadata_id,))
+                cursor.execute("DELETE FROM statistics_short_term WHERE metadata_id = ?", (stats_metadata_id,))
+                self.log(f"Cleared existing statistics for metadata_id {stats_metadata_id}")
+
             # Get all states in chronological order (individual hourly consumption)
+            # Use MAX to deduplicate - if multiple states exist for same hour, take the latest
             cursor.execute("""
                 SELECT state, last_changed_ts
                 FROM states
@@ -129,36 +137,50 @@ class BackfillState(hass.Hass):
                 conn.close()
                 return {"error": "No valid states found"}, 404
 
-            # Group by hour and sum consumption for each hour
-            from collections import defaultdict
-            hourly_data = defaultdict(list)
+            # Group by hour - take the LATEST value for each hour (not sum)
+            # This prevents duplicate states from doubling the consumption
+            hourly_data = {}
 
             for state_str, ts in states:
                 consumption = float(state_str)
                 hour_ts = int(ts // 3600 * 3600)
-                hourly_data[hour_ts].append(consumption)
+                # Overwrite with latest value for this hour (states are ordered by timestamp)
+                hourly_data[hour_ts] = consumption
 
-            # Calculate cumulative sum for statistics
+            # Always recalculate cumulative sum from the beginning of our data
+            # This ensures consistency regardless of existing statistics
             inserted = 0
             updated = 0
+            deleted = 0
+            cumulative_sum = 0.0
 
-            # Get the starting cumulative sum from the last statistic before our earliest timestamp
-            earliest_ts = min(hourly_data.keys())
-            cursor.execute("""
-                SELECT sum FROM statistics
-                WHERE metadata_id = ? AND start_ts < ?
-                ORDER BY start_ts DESC
-                LIMIT 1
-            """, (stats_metadata_id, earliest_ts))
+            sorted_hours = sorted(hourly_data.keys())
+            if not sorted_hours:
+                conn.close()
+                return {"error": "No hourly data found"}, 404
 
-            prior_sum_row = cursor.fetchone()
-            cumulative_sum = prior_sum_row[0] if prior_sum_row else 0.0
+            earliest_ts = sorted_hours[0]
+            latest_ts = sorted_hours[-1]
 
-            self.log(f"Starting cumulative sum from {cumulative_sum} (timestamp before {earliest_ts})")
+            self.log(f"Processing {len(sorted_hours)} hours from {datetime.fromtimestamp(earliest_ts)} to {datetime.fromtimestamp(latest_ts)}")
 
-            for hour_ts in sorted(hourly_data.keys()):
-                # Sum all consumption values for this hour
-                hour_consumption = sum(hourly_data[hour_ts])
+            # Delete any statistics for hours that don't have corresponding states
+            # This cleans up orphaned statistics that could cause cumulative sum issues
+            if not clear_existing:
+                cursor.execute("""
+                    DELETE FROM statistics
+                    WHERE metadata_id = ?
+                    AND start_ts >= ?
+                    AND start_ts <= ?
+                    AND start_ts NOT IN ({})
+                """.format(','.join('?' * len(sorted_hours))),
+                    [stats_metadata_id, earliest_ts, latest_ts] + sorted_hours)
+                deleted = cursor.rowcount
+                if deleted > 0:
+                    self.log(f"Deleted {deleted} orphaned statistics entries")
+
+            for hour_ts in sorted_hours:
+                hour_consumption = hourly_data[hour_ts]
                 cumulative_sum += hour_consumption
 
                 # Check if exists
@@ -176,21 +198,23 @@ class BackfillState(hass.Hass):
                     updated += 1
                 else:
                     cursor.execute("""
-                        INSERT INTO statistics (metadata_id, start_ts, state, sum)
-                        VALUES (?, ?, ?, ?)
-                    """, (stats_metadata_id, hour_ts, hour_consumption, cumulative_sum))
+                        INSERT INTO statistics (metadata_id, start_ts, created_ts, state, sum)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (stats_metadata_id, hour_ts, hour_ts, hour_consumption, cumulative_sum))
                     inserted += 1
 
             conn.commit()
             conn.close()
 
-            self.log(f"Generated statistics: {inserted} inserted, {updated} updated")
+            self.log(f"Generated statistics: {inserted} inserted, {updated} updated, {deleted} orphans deleted, final sum: {cumulative_sum:.2f}")
 
             return {
                 "status": "success",
                 "inserted": inserted,
                 "updated": updated,
-                "total_hours": len(hourly_data)
+                "deleted": deleted,
+                "total_hours": len(hourly_data),
+                "final_sum": cumulative_sum
             }, 200
 
         except Exception as e:
@@ -204,6 +228,7 @@ class BackfillState(hass.Hass):
         energy_entity_id = data.get("energy_entity_id")
         cost_entity_id = data.get("cost_entity_id")
         rate = data.get("rate")  # Optional - will auto-calculate if not provided
+        clear_existing = data.get("clear_existing", False)
 
         if not energy_entity_id or not cost_entity_id:
             return {"error": "energy_entity_id and cost_entity_id required"}, 400
@@ -227,6 +252,12 @@ class BackfillState(hass.Hass):
                 conn.close()
                 return {"error": f"No statistics metadata found for {cost_entity_id}"}, 404
             cost_stats_id = row[0]
+
+            # Optionally clear existing cost statistics
+            if clear_existing:
+                cursor.execute("DELETE FROM statistics WHERE metadata_id = ?", (cost_stats_id,))
+                cursor.execute("DELETE FROM statistics_short_term WHERE metadata_id = ?", (cost_stats_id,))
+                self.log(f"Cleared existing cost statistics for metadata_id {cost_stats_id}")
 
             # Auto-calculate rate if not provided
             if not rate:
@@ -277,26 +308,30 @@ class BackfillState(hass.Hass):
                 conn.close()
                 return {"error": "No energy statistics found"}, 404
 
-            # Calculate cumulative cost
+            # Always recalculate cumulative cost from scratch
             inserted = 0
             updated = 0
+            cumulative_cost = 0.0
 
-            # Get the starting cumulative cost from the last statistic before our earliest timestamp
-            if energy_stats:
-                earliest_ts = energy_stats[0][0]
+            earliest_ts = energy_stats[0][0]
+            latest_ts = energy_stats[-1][0]
+            energy_timestamps = [ts for ts, _ in energy_stats]
+
+            self.log(f"Processing {len(energy_stats)} hours from {datetime.fromtimestamp(earliest_ts)} to {datetime.fromtimestamp(latest_ts)}")
+
+            # Delete orphaned cost statistics (hours without corresponding energy stats)
+            if not clear_existing:
                 cursor.execute("""
-                    SELECT sum FROM statistics
-                    WHERE metadata_id = ? AND start_ts < ?
-                    ORDER BY start_ts DESC
-                    LIMIT 1
-                """, (cost_stats_id, earliest_ts))
-
-                prior_cost_row = cursor.fetchone()
-                cumulative_cost = prior_cost_row[0] if prior_cost_row else 0.0
-
-                self.log(f"Starting cumulative cost from {cumulative_cost} (timestamp before {earliest_ts})")
-            else:
-                cumulative_cost = 0.0
+                    DELETE FROM statistics
+                    WHERE metadata_id = ?
+                    AND start_ts >= ?
+                    AND start_ts <= ?
+                    AND start_ts NOT IN ({})
+                """.format(','.join('?' * len(energy_timestamps))),
+                    [cost_stats_id, earliest_ts, latest_ts] + energy_timestamps)
+                deleted = cursor.rowcount
+                if deleted > 0:
+                    self.log(f"Deleted {deleted} orphaned cost statistics entries")
 
             for start_ts, energy_kwh in energy_stats:
                 if energy_kwh is None:
@@ -321,15 +356,15 @@ class BackfillState(hass.Hass):
                     updated += 1
                 else:
                     cursor.execute("""
-                        INSERT INTO statistics (metadata_id, start_ts, state, sum)
-                        VALUES (?, ?, ?, ?)
-                    """, (cost_stats_id, start_ts, hour_cost, cumulative_cost))
+                        INSERT INTO statistics (metadata_id, start_ts, created_ts, state, sum)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (cost_stats_id, start_ts, start_ts, hour_cost, cumulative_cost))
                     inserted += 1
 
             conn.commit()
             conn.close()
 
-            self.log(f"Generated cost statistics: {inserted} inserted, {updated} updated")
+            self.log(f"Generated cost statistics: {inserted} inserted, {updated} updated, final cost: ${cumulative_cost:.2f}")
 
             return {
                 "status": "success",

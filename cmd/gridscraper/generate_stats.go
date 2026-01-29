@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	generateStatsService string
-	generateStatsRate    string
+	generateStatsService      string
+	generateStatsRate         string
+	generateStatsClearExisting bool
 )
 
 var generateStatsCmd = &cobra.Command{
@@ -27,6 +28,7 @@ var generateStatsCmd = &cobra.Command{
 func init() {
 	generateStatsCmd.Flags().StringVar(&generateStatsService, "service", "nyseg", "Service to generate stats for (nyseg or coned, default: nyseg)")
 	generateStatsCmd.Flags().StringVar(&generateStatsRate, "rate", "", "Optional cost per kWh rate for cost statistics (e.g., 0.20102749)")
+	generateStatsCmd.Flags().BoolVar(&generateStatsClearExisting, "clear-existing", false, "Clear existing statistics before regenerating (use to fix corrupted data)")
 	rootCmd.AddCommand(generateStatsCmd)
 }
 
@@ -62,8 +64,9 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 	apiURL := fmt.Sprintf("%s/api/appdaemon/generate_statistics", haConfig.URL)
 
 	// Create payload
-	payload := map[string]string{
-		"entity_id": haConfig.EntityID,
+	payload := map[string]interface{}{
+		"entity_id":      haConfig.EntityID,
+		"clear_existing": generateStatsClearExisting,
 	}
 
 	body, err := json.Marshal(payload)
@@ -121,9 +124,10 @@ func runGenerateStats(cmd *cobra.Command, args []string) error {
 	costEntityID := haConfig.EntityID + "_cost"
 	costAPIURL := fmt.Sprintf("%s/api/appdaemon/generate_cost_statistics", haConfig.URL)
 
-	costPayload := map[string]string{
+	costPayload := map[string]interface{}{
 		"energy_entity_id": haConfig.EntityID,
 		"cost_entity_id":   costEntityID,
+		"clear_existing":   generateStatsClearExisting,
 	}
 
 	// Add rate if provided via flag or config
