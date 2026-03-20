@@ -147,12 +147,13 @@ class BackfillState(hass.Hass):
                 # Overwrite with latest value for this hour (states are ordered by timestamp)
                 hourly_data[hour_ts] = consumption
 
-            # Always recalculate cumulative sum from the beginning of our data
-            # This ensures consistency regardless of existing statistics
+            # Recalculate cumulative sum starting from where existing statistics left off.
+            # This handles the case where HA has purged old states — without this, the sum
+            # would reset to 0 at the earliest available state, creating a huge negative
+            # delta in the Energy dashboard at the state retention boundary.
             inserted = 0
             updated = 0
             deleted = 0
-            cumulative_sum = 0.0
 
             sorted_hours = sorted(hourly_data.keys())
             if not sorted_hours:
@@ -163,6 +164,18 @@ class BackfillState(hass.Hass):
             latest_ts = sorted_hours[-1]
 
             self.log(f"Processing {len(sorted_hours)} hours from {datetime.fromtimestamp(earliest_ts)} to {datetime.fromtimestamp(latest_ts)}")
+
+            # Seed cumulative sum from the last statistics entry before our earliest state.
+            # If no prior entry exists (e.g. first ever run), start from 0.
+            cursor.execute("""
+                SELECT sum FROM statistics
+                WHERE metadata_id = ? AND start_ts < ?
+                ORDER BY start_ts DESC
+                LIMIT 1
+            """, (stats_metadata_id, earliest_ts))
+            row = cursor.fetchone()
+            cumulative_sum = row[0] if row else 0.0
+            self.log(f"Seeding cumulative sum from prior statistics: {cumulative_sum:.2f}")
 
             # Delete any statistics for hours that don't have corresponding states
             # This cleans up orphaned statistics that could cause cumulative sum issues
@@ -308,16 +321,28 @@ class BackfillState(hass.Hass):
                 conn.close()
                 return {"error": "No energy statistics found"}, 404
 
-            # Always recalculate cumulative cost from scratch
+            # Recalculate cumulative cost seeded from the last prior statistics entry.
+            # Same fix as generate_statistics: prevents reset-to-zero at the state
+            # retention boundary causing negative spikes in the Energy dashboard.
             inserted = 0
             updated = 0
-            cumulative_cost = 0.0
 
             earliest_ts = energy_stats[0][0]
             latest_ts = energy_stats[-1][0]
             energy_timestamps = [ts for ts, _ in energy_stats]
 
             self.log(f"Processing {len(energy_stats)} hours from {datetime.fromtimestamp(earliest_ts)} to {datetime.fromtimestamp(latest_ts)}")
+
+            # Seed cumulative cost from the last cost statistics entry before our range.
+            cursor.execute("""
+                SELECT sum FROM statistics
+                WHERE metadata_id = ? AND start_ts < ?
+                ORDER BY start_ts DESC
+                LIMIT 1
+            """, (cost_stats_id, earliest_ts))
+            row = cursor.fetchone()
+            cumulative_cost = row[0] if row else 0.0
+            self.log(f"Seeding cumulative cost from prior statistics: {cumulative_cost:.2f}")
 
             # Delete orphaned cost statistics (hours without corresponding energy stats)
             if not clear_existing:
