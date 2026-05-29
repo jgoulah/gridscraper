@@ -1,17 +1,49 @@
 #!/bin/bash
 # GridScraper sync script - fetch, publish, and generate statistics
-# Usage: gridscraper-sync.sh [service]
+# Usage: gridscraper-sync.sh [--regen-stats] [service]
+#   --regen-stats: only run generate-stats with --clear-existing (skip fetch/publish)
 #   service: nyseg, coned, or omit for all services
 
 CONFIG_FILE="${CONFIG_FILE:-/usr/local/etc/gridscraper/config.yaml}"
 DB_FILE="${DB_FILE:-/usr/local/etc/gridscraper/data.db}"
 GRIDSCRAPER="/opt/gridscraper/gridscraper"
 
+# Parse flags
+REGEN_STATS=false
+while [[ "$1" == --* ]]; do
+    case "$1" in
+        --regen-stats) REGEN_STATS=true ;;
+        *) echo "Error: Unknown flag '$1'"; echo "Usage: $0 [--regen-stats] [nyseg|coned|all]"; exit 1 ;;
+    esac
+    shift
+done
+
 # Determine which services to sync
 SERVICE="${1:-all}"
 
 # Track results
 declare -A RESULTS
+
+# Function to regenerate statistics with --clear-existing for a single service
+regen_stats_service() {
+    local service=$1
+    echo "-----------------------------------------"
+    echo "-------- Regenerating stats: $service -------"
+    echo "-----------------------------------------"
+
+    echo "Regenerating statistics with --clear-existing for $service..."
+    if ! $GRIDSCRAPER --config "$CONFIG_FILE" --db "$DB_FILE" generate-stats --service "$service" --clear-existing; then
+        echo "✗ Failed to regenerate statistics for $service"
+        RESULTS[$service]="failed"
+        echo ""
+        return 1
+    fi
+
+    echo "✓ $service stats regenerated"
+    RESULTS[$service]="success"
+    echo ""
+    return 0
+}
 
 # Function to sync a single service
 sync_service() {
@@ -58,20 +90,22 @@ echo "=== GridScraper Sync started at $(date) ==="
 echo "=================================================================================="
 echo ""
 
+RUN_SERVICE=$( $REGEN_STATS && echo "regen_stats_service" || echo "sync_service" )
+
 case "$SERVICE" in
     nyseg)
-        sync_service nyseg
+        $RUN_SERVICE nyseg
         ;;
     coned)
-        sync_service coned
+        $RUN_SERVICE coned
         ;;
     all)
-        sync_service nyseg
-        sync_service coned
+        $RUN_SERVICE nyseg
+        $RUN_SERVICE coned
         ;;
     *)
         echo "Error: Unknown service '$SERVICE'"
-        echo "Usage: $0 [nyseg|coned|all]"
+        echo "Usage: $0 [--regen-stats] [nyseg|coned|all]"
         exit 1
         ;;
 esac

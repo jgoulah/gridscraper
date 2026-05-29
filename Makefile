@@ -1,4 +1,4 @@
-.PHONY: build build-remote install clean install-remote help
+.PHONY: build build-remote install clean install-remote install-backfill-state test-appdaemon help
 
 BINARY_NAME=gridscraper
 INSTALL_PATH=/usr/local/bin
@@ -13,8 +13,9 @@ help:
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build          Build the gridscraper binary"
-	@echo "  make install        Install binary and sync script to system"
-	@echo "  make install-remote Install binary and sync script to $(REMOTE_HOST)"
+	@echo "  make install                Install binary and sync script to system"
+	@echo "  make install-remote         Install binary and sync script to $(REMOTE_HOST)"
+	@echo "  make install-backfill-state Deploy backfill_state.py to both HA hosts"
 	@echo "  make clean          Remove built binary"
 	@echo ""
 	@echo "Local installation paths:"
@@ -66,6 +67,23 @@ install-remote: build-remote
 #      Or for specific services:
 #      - NYSEG only: /opt/gridscraper/gridscraper-sync.sh nyseg
 #      - ConEd only: /opt/gridscraper/gridscraper-sync.sh coned
+
+install-backfill-state:
+	@echo "Installing backfill_state.py to HA hosts..."
+	scp scripts/appdaemon/backfill_state.py homeassistant.treehouse.goulah:config/appdaemon-configs/backfill_state.py
+	scp scripts/appdaemon/backfill_state.py homeassistant.city.goulah:config/appdaemon-configs/backfill_state.py
+	@echo "Restarting AppDaemon on HA hosts..."
+	ssh homeassistant.treehouse.goulah "ha addons restart a0d7b954_appdaemon"
+	ssh homeassistant.city.goulah "ha addons restart a0d7b954_appdaemon"
+	@echo "✓ Installed and restarted AppDaemon on both HA hosts"
+
+test-appdaemon:
+	@echo "Running AppDaemon Python tests..."
+	@if [ ! -d ".venv-test" ]; then \
+		python3 -m venv .venv-test && .venv-test/bin/pip install pytest -q; \
+	fi
+	.venv-test/bin/python -m pytest scripts/appdaemon/tests/ -v
+	@echo "✓ AppDaemon tests complete"
 
 clean:
 	@echo "Cleaning build artifacts..."

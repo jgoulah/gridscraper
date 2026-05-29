@@ -29,6 +29,9 @@ vendor/
 *.swo
 *~
 
+# Python test venv
+.venv-test/
+
 # OS files
 .DS_Store
 Thumbs.db

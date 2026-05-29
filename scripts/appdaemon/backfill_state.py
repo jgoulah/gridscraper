@@ -1,6 +1,7 @@
 import hassapi as hass
 import sqlite3
 import json
+import time
 from datetime import datetime
 
 class BackfillState(hass.Hass):
@@ -177,9 +178,11 @@ class BackfillState(hass.Hass):
             cumulative_sum = row[0] if row else 0.0
             self.log(f"Seeding cumulative sum from prior statistics: {cumulative_sum:.2f}")
 
-            # Delete any statistics for hours that don't have corresponding states
-            # This cleans up orphaned statistics that could cause cumulative sum issues
+            # Delete any statistics for hours that don't have corresponding states.
+            # Also delete stats beyond latest_ts up to now — stale entries from a previous
+            # run that covered more days than the current data cause negative spikes.
             if not clear_existing:
+                now_ts = time.time()
                 cursor.execute("""
                     DELETE FROM statistics
                     WHERE metadata_id = ?
@@ -187,7 +190,7 @@ class BackfillState(hass.Hass):
                     AND start_ts <= ?
                     AND start_ts NOT IN ({})
                 """.format(','.join('?' * len(sorted_hours))),
-                    [stats_metadata_id, earliest_ts, latest_ts] + sorted_hours)
+                    [stats_metadata_id, earliest_ts, now_ts] + sorted_hours)
                 deleted = cursor.rowcount
                 if deleted > 0:
                     self.log(f"Deleted {deleted} orphaned statistics entries")
@@ -344,8 +347,10 @@ class BackfillState(hass.Hass):
             cumulative_cost = row[0] if row else 0.0
             self.log(f"Seeding cumulative cost from prior statistics: {cumulative_cost:.2f}")
 
-            # Delete orphaned cost statistics (hours without corresponding energy stats)
+            # Delete orphaned cost statistics (hours without corresponding energy stats).
+            # Upper bound is now_ts, not latest_ts, to catch stale future entries.
             if not clear_existing:
+                now_ts = time.time()
                 cursor.execute("""
                     DELETE FROM statistics
                     WHERE metadata_id = ?
@@ -353,7 +358,7 @@ class BackfillState(hass.Hass):
                     AND start_ts <= ?
                     AND start_ts NOT IN ({})
                 """.format(','.join('?' * len(energy_timestamps))),
-                    [cost_stats_id, earliest_ts, latest_ts] + energy_timestamps)
+                    [cost_stats_id, earliest_ts, now_ts] + energy_timestamps)
                 deleted = cursor.rowcount
                 if deleted > 0:
                     self.log(f"Deleted {deleted} orphaned cost statistics entries")

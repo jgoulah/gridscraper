@@ -1112,6 +1112,7 @@ func parseNYSEGCSVReader(r io.Reader) ([]models.UsageData, error) {
 
 	for i, col := range header {
 		colLower := strings.ToLower(strings.TrimSpace(col))
+		colLower = strings.TrimFunc(colLower, func(r rune) bool { return r < 0x20 || r == 0xFEFF })
 		switch {
 		case strings.Contains(colLower, "date") && !strings.Contains(colLower, "time"):
 			dateCol = i
@@ -1119,7 +1120,7 @@ func parseNYSEGCSVReader(r io.Reader) ([]models.UsageData, error) {
 			startTimeCol = i
 		case strings.Contains(colLower, "end time"):
 			endTimeCol = i
-		case strings.Contains(colLower, "usage"):
+		case strings.Contains(colLower, "usage") || strings.Contains(colLower, "net unit") || colLower == "net":
 			usageCol = i
 		}
 	}
